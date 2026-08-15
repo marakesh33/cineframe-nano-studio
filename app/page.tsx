@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, StreamTarget } from "mediabunny";
+import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from "mediabunny";
 
 type Scene = {
   id: number;
@@ -14,28 +14,202 @@ type Scene = {
   error?: string;
 };
 
-const DEFAULT_STYLE = "Dark hand-painted historical realism, Renaissance-era characters, dramatic chiaroscuro, cold blue-gray shadows, warm amber candlelight, cinematic composition, detailed oil-paint texture, serious psychological atmosphere, no text, no watermark.";
+type PipelineStage = "idle" | "voice" | "frames" | "render" | "done" | "error";
+
+const DEFAULT_STYLE = `cinematic oil-painting style, dramatic chiaroscuro lighting, rich red and teal color grading, deep contrast between warm crimson highlights and cool cyan shadows, painterly visible brushstrokes, atmospheric haze and film grain, moody and emotionally charged atmosphere, hyper-detailed realism blended with expressive painting texture, cinematic 16:9 widescreen composition, dramatic single-light-source lighting, no text, no watermark`;
+
+const STYLE_REFERENCE_PATHS = [
+  "/style-references/psychology-style-01-clean.jpg",
+  "/style-references/psychology-style-02-clean.jpg",
+];
+
+const VOICES = [
+  { id: "Gacrux", label: "Gacrux · глубокий взрослый" },
+  { id: "Charon", label: "Charon · спокойный рассказчик" },
+  { id: "Schedar", label: "Schedar · ровный документальный" },
+  { id: "Fenrir", label: "Fenrir · уверенный и живой" },
+];
+
+const DEFAULT_VOICE_DIRECTION = `Native Russian male narrator, 40–55 years old. Deep, warm, mature baritone; calm authority, intelligent and emotionally restrained. Natural conversational Russian, clear diction, medium pace, meaningful pauses after important ideas. Avoid a high pitch, advertising enthusiasm, theatrical acting, whispering, singing and robotic rhythm. Read the supplied script verbatim without adding or removing words.`;
+const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
+
+type StyleReference = { data: string; mime_type: string };
+let styleReferencePromise: Promise<StyleReference[]> | null = null;
+
+function bytesToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return btoa(binary);
+}
+
+function loadStyleReferences() {
+  if (!styleReferencePromise) {
+    styleReferencePromise = Promise.all(STYLE_REFERENCE_PATHS.map(async (path) => {
+      const response = await fetch(path);
+      if (!response.ok) throw new Error(`Не загрузился референс стиля: ${path}`);
+      return {
+        data: bytesToBase64(await response.arrayBuffer()),
+        mime_type: response.headers.get("content-type") || "image/jpeg",
+      };
+    }));
+  }
+  return styleReferencePromise;
+}
+
+type AudioPart = { data: string; mime: string };
+
+function collectAudioParts(value: unknown, parts: AudioPart[] = []): AudioPart[] {
+  if (!value || typeof value !== "object") return parts;
+  const item = value as Record<string, unknown>;
+  const data = typeof item.data === "string" ? item.data : null;
+  const mime = typeof item.mime_type === "string" ? item.mime_type : typeof item.mimeType === "string" ? item.mimeType : "";
+  if (data && (mime.startsWith("audio/") || item.type === "audio")) {
+    parts.push({ data, mime: mime || "audio/L16;codec=pcm;rate=24000" });
+    return parts;
+  }
+  for (const child of Object.values(item)) {
+    if (Array.isArray(child)) child.forEach((nested) => collectAudioParts(nested, parts));
+    else collectAudioParts(child, parts);
+  }
+  return parts;
+}
+
+function base64Bytes(value: string) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function makeWav(chunks: Uint8Array[], sampleRate: number) {
+  const pcmLength = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  const wav = new Uint8Array(44 + pcmLength);
+  const view = new DataView(wav.buffer);
+  const write = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index++) wav[offset + index] = value.charCodeAt(index);
+  };
+  write(0, "RIFF"); view.setUint32(4, 36 + pcmLength, true); write(8, "WAVE"); write(12, "fmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true); write(36, "data"); view.setUint32(40, pcmLength, true);
+  let offset = 44;
+  for (const chunk of chunks) { wav.set(chunk, offset); offset += chunk.byteLength; }
+  return wav;
+}
+
+async function readVoiceResponse(response: Response) {
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.startsWith("audio/")) return response.blob();
+  const raw = await response.text();
+  const payloads: unknown[] = [];
+  if (contentType.includes("event-stream") || raw.includes("data:")) {
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      try { payloads.push(JSON.parse(data)); } catch { /* Ignore stream keepalives. */ }
+    }
+  } else {
+    try { payloads.push(JSON.parse(raw)); } catch { throw new Error("Gemini вернула повреждённый аудиопоток"); }
+  }
+  const parts = payloads.flatMap((payload) => collectAudioParts(payload));
+  if (!parts.length) throw new Error("Gemini не вернула аудиодорожку");
+  const rateMatch = parts[0].mime.match(/rate[=:-](\d+)/i);
+  const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
+  const mime = parts[0].mime.toLowerCase();
+  if (!mime.includes("pcm") && !mime.includes("l16")) {
+    return new Blob(parts.map((part) => base64Bytes(part.data)), { type: parts[0].mime || "audio/wav" });
+  }
+  return new Blob([makeWav(parts.map((part) => base64Bytes(part.data)), sampleRate)], { type: "audio/wav" });
+}
 
 function clock(seconds: number) {
   const value = Math.max(0, Math.round(seconds));
   return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
 }
 
+function frameCountForDuration(seconds: number) {
+  return Math.max(1, Math.ceil(seconds / 7));
+}
+
+function extractOpeningQuote(text: string) {
+  const paragraphs = text.trim().split(/\n+/).map((part) => part.trim()).filter(Boolean);
+  if (!paragraphs[0]?.startsWith("«") || !paragraphs[0].includes("»") || !/Макиавелли/i.test(paragraphs[1] || "")) return null;
+  return { quote: paragraphs[0], author: paragraphs[1], rest: paragraphs.slice(2).join("\n\n") };
+}
+
+function voiceTextForScript(text: string) {
+  const opening = extractOpeningQuote(text);
+  return opening ? `${opening.quote}\n\n${opening.rest}` : text;
+}
+
+function splitVoiceText(text: string, maxChars = 350) {
+  const paragraphs = text.trim().split(/\n+/).map((part) => part.trim()).filter(Boolean);
+  const chunks: string[] = [];
+  let current = "";
+  for (const paragraph of paragraphs) {
+    if ((current + "\n\n" + paragraph).length <= maxChars) {
+      current = current ? `${current}\n\n${paragraph}` : paragraph;
+      continue;
+    }
+    if (current) chunks.push(current);
+    if (paragraph.length <= maxChars) {
+      current = paragraph;
+      continue;
+    }
+    const sentences = paragraph.match(/[^.!?…]+[.!?…]+|[^.!?…]+$/g) || [paragraph];
+    current = "";
+    for (const sentence of sentences) {
+      if ((current + sentence).length > maxChars && current) { chunks.push(current.trim()); current = ""; }
+      current += sentence;
+    }
+  }
+  if (current) chunks.push(current.trim());
+  return chunks.length ? chunks : [text.trim()];
+}
+
+function shotDescription(direction: string, index: number, fragment: string) {
+  const numbered = direction.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  let containsNumberedScenes = false;
+  for (const line of numbered) {
+    const match = line.match(/^(?:(?:shot|frame|кадр|сцена)\s*)?(\d+)\s*[.):—-]\s*(.+)$/i);
+    if (match) containsNumberedScenes = true;
+    if (match && Number(match[1]) === index + 1) return match[2].replace(/[. ]+$/, "");
+  }
+  if (direction.trim() && !containsNumberedScenes) return `A concrete cinematic scene illustrating the idea "${fragment}", following this story direction: ${direction.trim()}`;
+  const naturalShot = index % 6 === 0 ? "a calm wide establishing composition" : index % 6 === 3 ? "a closer emotional composition" : "a natural medium cinematic composition";
+  return `Create one concrete narrative illustration that directly visualizes this exact voiceover fragment: "${fragment}". First identify the central human subject, then show a clear physical action, a believable location and only the objects needed to communicate the meaning. Use ${naturalShot} while maintaining continuity with neighboring scenes. Prefer literal cause-and-effect storytelling over vague symbols. Do not invent an unrelated office portrait, random philosopher, decorative statue, raven or abstract object unless the quoted narration genuinely requires it`;
+}
+
+function cleanSceneDescription(value: string) {
+  const marker = value.toLowerCase().indexOf("cinematic oil-painting style");
+  const subject = marker >= 0 ? value.slice(0, marker) : value;
+  return subject.trim().replace(/[,. ]+$/, "");
+}
+
 function splitIntoScenes(text: string, count: number, duration: number, style: string, direction: string, aspect: string) {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  const actualCount = Math.max(1, Math.min(count, Math.ceil(words.length / 5)));
+  const opening = extractOpeningQuote(text);
+  const words = (opening?.rest || text).trim().split(/\s+/).filter(Boolean);
+  const actualCount = Math.max(1, count);
   return Array.from({ length: actualCount }, (_, index): Scene => {
-    const from = Math.floor((index * words.length) / actualCount);
-    const to = Math.floor(((index + 1) * words.length) / actualCount);
-    const fragment = words.slice(from, to).join(" ");
-    const start = (index * duration) / actualCount;
-    const end = ((index + 1) * duration) / actualCount;
+    const narrativeIndex = opening ? index - 1 : index;
+    const narrativeCount = opening ? Math.max(1, actualCount - 1) : actualCount;
+    const from = Math.floor((Math.max(0, narrativeIndex) * words.length) / narrativeCount);
+    const to = Math.floor(((Math.max(0, narrativeIndex) + 1) * words.length) / narrativeCount);
+    const fragment = opening && index === 0
+      ? `${opening.quote}\n${opening.author}`
+      : words.slice(from, to).join(" ") || words[Math.max(0, narrativeIndex) % Math.max(1, words.length)] || direction || "Визуальная сцена";
+    const start = index * 7;
+    const end = Math.min(duration, start + 7);
     return {
       id: index + 1,
       start,
       end,
       text: fragment,
-      prompt: `${style}\n\nOutput composition: ${aspect}.\nOverall story direction: ${direction || "Create a coherent visual narrative."}\nNarration for this exact shot: "${fragment}"\nShow one clear visual moment that expresses the meaning of this narration. Keep recurring characters, wardrobe, facial features, palette and lighting consistent with every other shot. Strong foreground subject, readable composition, natural anatomy. Do not include captions, letters, logos or watermarks.`,
+      prompt: `${cleanSceneDescription(shotDescription(direction, index, fragment))}, ${style.replace("cinematic 16:9 widescreen composition", aspect === "9:16" ? "cinematic 9:16 vertical composition" : "cinematic 16:9 widescreen composition")}`,
       status: "ready",
     };
   });
@@ -49,7 +223,8 @@ export default function Home() {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState("");
   const [audioDuration, setAudioDuration] = useState(0);
-  const [shotLength, setShotLength] = useState(12);
+  const [targetDuration, setTargetDuration] = useState(60);
+  const frameCount = frameCountForDuration(targetDuration);
   const [quality, setQuality] = useState("1K");
   const [aspect, setAspect] = useState("16:9");
   const [subtitles, setSubtitles] = useState(true);
@@ -59,33 +234,76 @@ export default function Home() {
   const [showKeys, setShowKeys] = useState(false);
   const [message, setMessage] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
+  const [isGeneratingVoicePreview, setIsGeneratingVoicePreview] = useState(false);
+  const [voice, setVoice] = useState("Gacrux");
+  const [voiceDirection, setVoiceDirection] = useState(DEFAULT_VOICE_DIRECTION);
+  const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
+  const [voiceError, setVoiceError] = useState("");
+  const [pipelineStage, setPipelineStage] = useState<PipelineStage>("idle");
+  const [pipelineProgress, setPipelineProgress] = useState(0);
+  const [pipelineLabel, setPipelineLabel] = useState("Готов к запуску");
+  const [videoUrl, setVideoUrl] = useState("");
   const [isRendering, setIsRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const voicePreviewRef = useRef<HTMLAudioElement>(null);
+  const keyCursorRef = useRef(0);
+  const voiceChunkCacheRef = useRef(new Map<string, File>());
   const [playhead, setPlayhead] = useState(0);
 
   useEffect(() => {
     setKeys(localStorage.getItem("cineframe_google_keys") || "");
+    const savedCursor = Number(localStorage.getItem("cineframe_google_key_cursor") || "0");
+    keyCursorRef.current = Number.isFinite(savedCursor) && savedCursor >= 0 ? savedCursor : 0;
   }, []);
 
   const wordCount = useMemo(() => script.trim().split(/\s+/).filter(Boolean).length, [script]);
-  const estimatedDuration = Math.max(1, audioDuration || (wordCount / 130) * 60);
-  const expectedScenes = Math.max(1, Math.ceil(estimatedDuration / shotLength));
+  const estimatedDuration = Math.max(1, targetDuration);
+  const expectedScenes = frameCount;
   const selected = scenes.find((scene) => scene.id === selectedId) || null;
   const currentScene = scenes.find((scene) => playhead >= scene.start && playhead < scene.end) || selected || scenes[0];
   const done = scenes.filter((scene) => scene.status === "done").length;
 
-  function handleAudio(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  function attachAudio(file: File) {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     const url = URL.createObjectURL(file);
     const probe = new Audio(url);
-    probe.onloadedmetadata = () => setAudioDuration(probe.duration || 0);
+    probe.onloadedmetadata = () => {
+      setAudioDuration(probe.duration || 0);
+      setMessage(`Озвучка готова: ${clock(probe.duration || 0)}. Большая кнопка соберёт её с ${frameCount} кадрами в один MP4.`);
+    };
+    probe.onerror = () => setMessage("Голос создан, но браузер не смог прочитать аудиофайл.");
     setAudioName(file.name);
     setAudioFile(file);
     setAudioUrl(url);
     setScenes([]);
+  }
+
+  function handleAudio(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file) attachAudio(file);
+  }
+
+  function measureAudio(file: File) {
+    return new Promise<number>((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const audio = new Audio(url);
+      audio.onloadedmetadata = () => { const duration = audio.duration || 0; URL.revokeObjectURL(url); resolve(duration); };
+      audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Браузер не смог прочитать созданную озвучку")); };
+    });
+  }
+
+  function keyList() {
+    return [...new Set(keys.split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean))];
+  }
+
+  function takeNextKey(list: string[]) {
+    const index = keyCursorRef.current % list.length;
+    const key = list[index];
+    keyCursorRef.current = (index + 1) % list.length;
+    localStorage.setItem("cineframe_google_key_cursor", String(keyCursorRef.current));
+    return key;
   }
 
   function buildPlan() {
@@ -100,45 +318,290 @@ export default function Home() {
   }
 
   function saveKeys() {
-    localStorage.setItem("cineframe_google_keys", keys.trim());
+    const clean = keyList();
+    const value = clean.join("\n");
+    setKeys(value);
+    localStorage.setItem("cineframe_google_keys", value);
+    keyCursorRef.current = 0;
+    localStorage.setItem("cineframe_google_key_cursor", "0");
     setShowKeys(false);
-    setMessage("Ключи сохранены только в этом браузере.");
+    setMessage(`Сохранено ключей: ${clean.length}. Кадры и озвучка будут брать их по кругу.`);
   }
 
-  async function generateScene(scene: Scene, key: string) {
-    setScenes((items) => items.map((item) => item.id === scene.id ? { ...item, status: "working", error: undefined } : item));
+  function importKeys(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = typeof reader.result === "string" ? reader.result : "";
+      const found = [...new Set(text.match(/AIza[0-9A-Za-z_-]{20,}/g) || [])];
+      if (!found.length) {
+        setMessage("В CSV не нашлось ключей Google AI.");
+        return;
+      }
+      const value = found.join("\n");
+      setKeys(value);
+      localStorage.setItem("cineframe_google_keys", value);
+      keyCursorRef.current = 0;
+      localStorage.setItem("cineframe_google_key_cursor", "0");
+      setShowKeys(false);
+      setMessage(`Импортировано ${found.length} уникальных ключей. Ротация начинается с первого.`);
+    };
+    reader.readAsText(file);
+    event.target.value = "";
+  }
+
+  function importTextFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = typeof reader.result === "string" ? reader.result.trim() : "";
+      if (!content) {
+        setMessage("Выбранный файл пуст.");
+        return;
+      }
+
+      const voiceMarker = "=== ТЕКСТ ДЛЯ ОЗВУЧКИ ===";
+      const scenesMarker = "=== ПРОМПТЫ СЦЕН И ВИДЕО ===";
+      const scenesMarkerIndex = content.indexOf(scenesMarker);
+      if (scenesMarkerIndex >= 0) {
+        const voicePart = content.slice(0, scenesMarkerIndex).replace(voiceMarker, "").trim();
+        const scenesPart = content.slice(scenesMarkerIndex + scenesMarker.length).trim();
+        setScript(voicePart);
+        setDirection(scenesPart);
+        const promptCount = scenesPart.split(/\r?\n/).filter((line) => /^\s*\d+\s*[.):—-]/.test(line)).length;
+        if (promptCount >= 250) setTargetDuration(1800);
+        setScenes([]);
+        setMessage(`Загружен полный проект «${file.name}»: текст озвучки и ${promptCount} промптов сцен.`);
+        return;
+      }
+
+      const promptCount = content.split(/\r?\n/).filter((line) => /^\s*\d+\s*[.):—-]/.test(line)).length;
+      if (promptCount >= 3) {
+        setDirection(content);
+        if (promptCount >= 250) setTargetDuration(1800);
+        setScenes([]);
+        setMessage(`Загружен файл «${file.name}»: найдено ${promptCount} промптов сцен.`);
+      } else {
+        setScript(content);
+        setScenes([]);
+        setMessage(`Загружен текст озвучки «${file.name}».`);
+      }
+    };
+    reader.onerror = () => setMessage("Не удалось прочитать выбранный файл.");
+    reader.readAsText(file);
+    event.target.value = "";
+  }
+
+  async function requestVoiceTrack(list: string[], text: string, desiredSeconds = 0, previousSeconds = 0) {
+    let lastError = "Озвучка не создалась";
+    const attempts = Math.min(5, list.length);
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection, desiredSeconds, previousSeconds }),
+        });
+      } catch {
+        lastError = "Сетевое соединение прервалось. Автоматически пробую следующий ключ…";
+        continue;
+      }
+      if (response.ok) {
+        try {
+          const blob = await readVoiceResponse(response);
+          if (!blob.size) throw new Error("Gemini вернула пустую аудиодорожку");
+          return new File([blob], `gemini-${voice.toLowerCase()}.wav`, { type: blob.type || "audio/wav" });
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : "Gemini не вернула аудиодорожку";
+          continue;
+        }
+      }
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      lastError = result.error || `Google API: ${response.status}`;
+      if (/current location|not available in your region/i.test(lastError)) break;
+    }
+    throw new Error(lastError);
+  }
+
+  async function combineVoiceFiles(files: File[]) {
+    if (files.length === 1) return files[0];
+    const audioContext = new AudioContext({ sampleRate: 24000 });
     try {
-      const response = await fetch("/api/nano", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ apiKey: key, prompt: scene.prompt, quality, aspectRatio: aspect }),
-      });
-      const result = await response.json() as { image?: string; error?: string };
-      if (!response.ok || !result.image) throw new Error(result.error || `Google API: ${response.status}`);
-      setScenes((items) => items.map((item) => item.id === scene.id ? { ...item, image: result.image, status: "done" } : item));
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "Ошибка генерации";
-      setScenes((items) => items.map((item) => item.id === scene.id ? { ...item, status: "error", error: reason } : item));
+      const buffers = await Promise.all(files.map((file) => file.arrayBuffer().then((data) => audioContext.decodeAudioData(data))));
+      const sampleRate = buffers[0]?.sampleRate || 24000;
+      const totalSamples = buffers.reduce((total, buffer) => total + buffer.length, 0);
+      const pcm = new Uint8Array(totalSamples * 2);
+      const view = new DataView(pcm.buffer);
+      let offset = 0;
+      for (const buffer of buffers) {
+        for (let sample = 0; sample < buffer.length; sample++) {
+          let value = 0;
+          for (let channel = 0; channel < buffer.numberOfChannels; channel++) value += buffer.getChannelData(channel)[sample] || 0;
+          value = Math.max(-1, Math.min(1, value / Math.max(1, buffer.numberOfChannels)));
+          view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+          offset += 2;
+        }
+      }
+      return new File([makeWav([pcm], sampleRate)], `gemini-${voice.toLowerCase()}-full.wav`, { type: "audio/wav" });
+    } finally {
+      await audioContext.close();
     }
   }
 
-  async function generateAll() {
-    const list = keys.split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean);
+  async function padVoicePart(file: File, minimumSeconds: number) {
+    const audioContext = new AudioContext({ sampleRate: 24000 });
+    try {
+      const buffer = await audioContext.decodeAudioData(await file.arrayBuffer());
+      if (buffer.duration >= minimumSeconds) return file;
+      const sampleRate = buffer.sampleRate || 24000;
+      const exactSamples = Math.max(buffer.length, Math.round(minimumSeconds * sampleRate));
+      const pcm = new Uint8Array(exactSamples * 2);
+      const view = new DataView(pcm.buffer);
+      for (let sample = 0; sample < buffer.length; sample++) {
+        let value = 0;
+        for (let channel = 0; channel < buffer.numberOfChannels; channel++) value += buffer.getChannelData(channel)[sample] || 0;
+        value = Math.max(-1, Math.min(1, value / Math.max(1, buffer.numberOfChannels)));
+        view.setInt16(sample * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+      }
+      return new File([makeWav([pcm], sampleRate)], file.name, { type: "audio/wav" });
+    } finally {
+      await audioContext.close();
+    }
+  }
+
+  async function requestLongVoiceTrack(list: string[], text: string, desiredSeconds: number, onProgress?: (completed: number, total: number) => void) {
+    const chunks = splitVoiceText(text);
+    const totalWords = chunks.reduce((total, chunk) => total + chunk.split(/\s+/).filter(Boolean).length, 0);
+    const files: File[] = [];
+    for (let index = 0; index < chunks.length; index++) {
+      const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
+      const chunkSeconds = Math.max(8, desiredSeconds * (chunkWords / Math.max(1, totalWords)));
+      const cacheKey = `${voice}:${Math.round(desiredSeconds)}:${index}:${chunks[index]}`;
+      const cached = voiceChunkCacheRef.current.get(cacheKey);
+      if (cached) {
+        files.push(cached);
+        onProgress?.(index + 1, chunks.length);
+        continue;
+      }
+      const requestedSeconds = chunkSeconds * 0.95;
+      let part = await requestVoiceTrack(list, chunks[index], requestedSeconds);
+      let partDuration = await measureAudio(part);
+      if (partDuration < chunkSeconds * 0.55) {
+        part = await requestVoiceTrack(list, chunks[index], requestedSeconds, partDuration);
+        partDuration = await measureAudio(part);
+      }
+      if (partDuration < chunkSeconds * 0.45) throw new Error(`Gemini не дочитала часть ${index + 1}. Нажми «Продолжить озвучку» — готовые части сохранятся.`);
+      part = await padVoicePart(part, chunkSeconds);
+      voiceChunkCacheRef.current.set(cacheKey, part);
+      files.push(part);
+      onProgress?.(index + 1, chunks.length);
+    }
+    const combined = await combineVoiceFiles(files);
+    const combinedDuration = await measureAudio(combined);
+    if (combinedDuration < desiredSeconds * 0.96) throw new Error(`Озвучка получилась только ${clock(combinedDuration)} вместо ${clock(desiredSeconds)}. MP4 не будет собран с тишиной — повтори озвучку.`);
+    return combined;
+  }
+
+  async function generateVoice() {
+    const list = keyList();
     if (!list.length) { setShowKeys(true); return; }
-    if (!scenes.length) { setMessage("Снача создай план кадров."); return; }
+    if (!script.trim()) { setMessage("Снача вставь сценарий — именно его сайт озвучит."); return; }
+    setIsGeneratingVoice(true);
+    setVoiceError("");
+    const voicePartCount = splitVoiceText(voiceTextForScript(script)).length;
+    setMessage(`Gemini создаёт озвучку частями: 0 из ${voicePartCount}. Не закрывай страницу.`);
+    try {
+      attachAudio(await requestLongVoiceTrack(list, voiceTextForScript(script), targetDuration, (completed, total) => setMessage(`Создаю озвучку: часть ${completed} из ${total}…`)));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Озвучка не создалась";
+      setVoiceError(reason);
+      setMessage(`Озвучка не создалась: ${reason}`);
+    } finally {
+      setIsGeneratingVoice(false);
+    }
+  }
+
+  async function previewVoice() {
+    const list = keyList();
+    if (!list.length) { setShowKeys(true); return; }
+    setIsGeneratingVoicePreview(true);
+    setVoiceError("");
+    setMessage("Создаю короткий пример выбранного голоса…");
+    try {
+      const file = await requestVoiceTrack(list, VOICE_PREVIEW_TEXT, 8);
+      const blob = file.slice();
+      if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
+      const url = URL.createObjectURL(blob);
+      setVoicePreviewUrl(url);
+      setMessage("Пример готов. Если воспроизведение не началось само, нажми ▶ в плеере.");
+      setTimeout(() => voicePreviewRef.current?.play().catch(() => undefined), 0);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Пример голоса не создался";
+      setVoiceError(reason);
+      setMessage(`Пример не создался: ${reason}`);
+    } finally {
+      setIsGeneratingVoicePreview(false);
+    }
+  }
+
+  async function generateScene(scene: Scene, list: string[]): Promise<Scene> {
+    setScenes((items) => items.map((item) => item.id === scene.id ? { ...item, status: "working", error: undefined } : item));
+    try {
+      const referenceImages = await loadStyleReferences();
+      const response = await fetch("/api/nano", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ apiKey: takeNextKey(list), prompt: scene.prompt, quality, aspectRatio: aspect, referenceImages, sceneId: scene.id, sceneCount: frameCount }),
+      });
+      const result = await response.json() as { image?: string; error?: string };
+      if (!response.ok || !result.image) throw new Error(result.error || `Google API: ${response.status}`);
+      const completed: Scene = { ...scene, image: result.image, status: "done", error: undefined };
+      setScenes((items) => items.map((item) => item.id === scene.id ? completed : item));
+      return completed;
+    } catch (error) {
+      const rawReason = error instanceof Error ? error.message : "Ошибка генерации";
+      const reason = rawReason === "Failed to fetch" ? "Связь с локальным сервером потеряна" : rawReason;
+      const failed: Scene = { ...scene, status: "error", error: reason };
+      setScenes((items) => items.map((item) => item.id === scene.id ? failed : item));
+      return failed;
+    }
+  }
+
+  async function generateAll(sourceScenes?: Scene[], sourceKeys?: string[], onProgress?: (completed: number, total: number) => void) {
+    const list = sourceKeys || keyList();
+    if (!list.length) { setShowKeys(true); return; }
+    if (!script.trim()) { setMessage("Вставь текст для озвучки в большое поле сверху."); return; }
+    let activeScenes = sourceScenes || scenes;
+    if (!activeScenes.length) {
+      activeScenes = splitIntoScenes(script, frameCount, estimatedDuration, style, direction, aspect);
+      setScenes(activeScenes);
+      setSelectedId(activeScenes[0]?.id || null);
+    }
     setIsGenerating(true);
-    setMessage("Генерация идёт напрямую через Nano Banana 2…");
-    const queue = scenes.filter((scene) => scene.status !== "done");
+    setMessage(`Создаю ${activeScenes.length} кадров. У каждого кадра будет свой ключ по кругу…`);
+    const queue = activeScenes.filter((scene) => scene.status !== "done");
+    const results = new Map<number, Scene>();
+    activeScenes.filter((scene) => scene.status === "done").forEach((scene) => results.set(scene.id, scene));
     let cursor = 0;
-    const worker = async (workerIndex: number) => {
+    let completed = results.size;
+    const worker = async () => {
       while (cursor < queue.length) {
         const index = cursor++;
-        await generateScene(queue[index], list[(index + workerIndex) % list.length]);
+        const result = await generateScene(queue[index], list);
+        results.set(result.id, result);
+        completed++;
+        onProgress?.(completed, activeScenes.length);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, (_, index) => worker(index)));
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, () => worker()));
+    const merged = activeScenes.map((scene) => results.get(scene.id) || scene);
+    setScenes(merged);
     setIsGenerating(false);
     setMessage("Очередь завершена. Кадры с ошибкой можно повторить отдельно.");
+    return merged;
   }
 
   function download(name: string, body: string, type: string) {
@@ -163,14 +626,14 @@ export default function Home() {
     download("subtitles.srt", scenes.map((scene, index) => `${index + 1}\n${stamp(scene.start)} --> ${stamp(scene.end)}\n${scene.text}\n`).join("\n"), "text/plain;charset=utf-8");
   }
 
-  async function renderVideo() {
-    if (!scenes.length || scenes.some((scene) => !scene.image)) {
+  async function renderVideo(videoScenes: Scene[] = scenes, soundtrack: File | null = audioFile, durationOverride = estimatedDuration) {
+    if (!videoScenes.length || videoScenes.some((scene) => !scene.image)) {
       setMessage("Снача создай все кадры. После этого сайт соберёт их в один MP4.");
-      return;
+      return false;
     }
     if (!("VideoEncoder" in window)) {
       setMessage("Этот браузер не поддерживает быструю сборку MP4. Открой сайт в Chrome.");
-      return;
+      return false;
     }
     setIsRendering(true);
     setRenderProgress(0);
@@ -178,9 +641,9 @@ export default function Home() {
     try {
       const width = aspect === "9:16" ? 720 : 1280;
       const height = aspect === "9:16" ? 1280 : 720;
-      const fps = 24;
+      const duration = videoScenes.at(-1)?.end || durationOverride;
+      const fps = duration >= 600 ? 15 : 24;
       const frameDuration = 1 / fps;
-      const duration = scenes.at(-1)?.end || estimatedDuration;
       const totalFrames = Math.ceil(duration * fps);
       const canvas = document.createElement("canvas");
       canvas.width = width;
@@ -188,7 +651,7 @@ export default function Home() {
       const context = canvas.getContext("2d", { alpha: false });
       if (!context) throw new Error("Не удалось создать видеохолст");
 
-      const images = await Promise.all(scenes.map((scene) => new Promise<HTMLImageElement>((resolve, reject) => {
+      const images = await Promise.all(videoScenes.map((scene) => new Promise<HTMLImageElement>((resolve, reject) => {
         const image = new Image();
         image.onload = () => resolve(image);
         image.onerror = () => reject(new Error(`Не загрузился кадр ${scene.id}`));
@@ -196,27 +659,25 @@ export default function Home() {
       })));
 
       const bufferTarget = new BufferTarget();
-      let target: BufferTarget | StreamTarget = bufferTarget;
-      const savePicker = (window as unknown as { showSaveFilePicker?: (options: Record<string, unknown>) => Promise<{ createWritable(): Promise<unknown> }> }).showSaveFilePicker;
-      if (savePicker) {
-        const handle = await savePicker({
-          suggestedName: `cineframe-${aspect === "9:16" ? "shorts" : "video"}.mp4`,
-          types: [{ description: "MP4 video", accept: { "video/mp4": [".mp4"] } }],
-        });
-        const writable = await handle.createWritable();
-        target = new StreamTarget(writable as WritableStream<never>, { chunked: true });
-      }
-
-      const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target });
+      const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target: bufferTarget });
       const videoSource = new CanvasSource(canvas, { codec: "avc", quality: new Quality("high") });
       output.addVideoTrack(videoSource, { frameRate: fps });
 
       let audioSource: AudioBufferSource | null = null;
       let decodedAudio: AudioBuffer | null = null;
-      if (audioFile) {
+      if (soundtrack) {
         const audioContext = new AudioContext();
-        decodedAudio = await audioContext.decodeAudioData(await audioFile.arrayBuffer());
+        decodedAudio = await audioContext.decodeAudioData(await soundtrack.arrayBuffer());
         await audioContext.close();
+        if (decodedAudio.duration < duration * 0.96) {
+          throw new Error(`Озвучка длится только ${clock(decodedAudio.duration)}, а видео ${clock(duration)}. Сборка остановлена, чтобы не создавать ролик с тишиной.`);
+        }
+        const exactLength = Math.max(1, Math.round(duration * decodedAudio.sampleRate));
+        const exactAudio = new AudioBuffer({ length: exactLength, numberOfChannels: decodedAudio.numberOfChannels, sampleRate: decodedAudio.sampleRate });
+        for (let channel = 0; channel < decodedAudio.numberOfChannels; channel++) {
+          exactAudio.getChannelData(channel).set(decodedAudio.getChannelData(channel).subarray(0, exactLength));
+        }
+        decodedAudio = exactAudio;
         audioSource = new AudioBufferSource({ codec: "aac", quality: new Quality("high") });
         output.addAudioTrack(audioSource);
       }
@@ -265,41 +726,186 @@ export default function Home() {
         });
       };
 
+      const drawOpeningQuote = (quote: string, author: string) => {
+        const fontSize = aspect === "9:16" ? 42 : 39;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        const maxWidth = width * (aspect === "9:16" ? 0.82 : 0.78);
+        const words = quote.replace(/^«|»[.!?]?$/g, "").split(/\s+/);
+        const lines: string[] = [];
+        let line = "";
+        context.font = `700 ${fontSize}px Arial`;
+        for (const word of words) {
+          const candidate = line ? `${line} ${word}` : word;
+          if (context.measureText(candidate).width > maxWidth && line) { lines.push(line); line = word; }
+          else line = candidate;
+        }
+        if (line) lines.push(line);
+        const lineHeight = fontSize * 1.17;
+        const firstY = height * (aspect === "9:16" ? 0.29 : 0.32) - ((lines.length - 1) * lineHeight) / 2;
+        lines.forEach((item, index) => {
+          const y = firstY + index * lineHeight;
+          context.lineJoin = "round";
+          context.lineWidth = 8;
+          context.strokeStyle = "rgba(0,0,0,.78)";
+          context.strokeText(item, width / 2, y);
+          context.fillStyle = "#f5f3ee";
+          context.fillText(item, width / 2, y);
+        });
+        context.font = `italic 500 ${Math.round(fontSize * 0.58)}px Arial`;
+        context.lineWidth = 5;
+        context.strokeStyle = "rgba(0,0,0,.8)";
+        context.strokeText(`— ${author.replace(/[.]$/, "")}`, width / 2, firstY + lines.length * lineHeight + fontSize * 0.45);
+        context.fillStyle = "#e3dfd7";
+        context.fillText(`— ${author.replace(/[.]$/, "")}`, width / 2, firstY + lines.length * lineHeight + fontSize * 0.45);
+      };
+
+      const openingQuote = extractOpeningQuote(videoScenes[0]?.text || "");
+
       let sceneIndex = 0;
       for (let frame = 0; frame < totalFrames; frame++) {
         const timestamp = frame / fps;
-        while (sceneIndex < scenes.length - 1 && timestamp >= scenes[sceneIndex].end) sceneIndex++;
-        const scene = scenes[sceneIndex];
+        while (sceneIndex < videoScenes.length - 1 && timestamp >= videoScenes[sceneIndex].end) sceneIndex++;
+        const scene = videoScenes[sceneIndex];
         const local = Math.max(0, Math.min(1, (timestamp - scene.start) / Math.max(0.001, scene.end - scene.start)));
         context.fillStyle = "#08090a";
         context.fillRect(0, 0, width, height);
         drawCover(images[sceneIndex], local, sceneIndex);
-        if (local > 0.94 && sceneIndex < scenes.length - 1) {
+        if (local > 0.94 && sceneIndex < videoScenes.length - 1) {
           const fade = (local - 0.94) / 0.06;
           drawCover(images[sceneIndex + 1], 0, sceneIndex + 1, fade);
         }
-        if (subtitles) drawSubtitle(scene.text);
+        if (sceneIndex === 0 && openingQuote) drawOpeningQuote(openingQuote.quote, openingQuote.author);
+        else if (subtitles) drawSubtitle(scene.text);
         await videoSource.add(timestamp, frameDuration, { keyFrame: frame % (fps * 2) === 0 });
-        if (frame % fps === 0 || frame === totalFrames - 1) setRenderProgress((frame + 1) / totalFrames);
+        if (frame % fps === 0 || frame === totalFrames - 1) {
+          const progress = (frame + 1) / totalFrames;
+          setRenderProgress(progress);
+          setPipelineProgress(80 + progress * 19);
+        }
       }
 
       await output.finalize();
-      if (target === bufferTarget && bufferTarget.buffer) {
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(new Blob([bufferTarget.buffer], { type: "video/mp4" }));
-        link.download = `cineframe-${aspect === "9:16" ? "shorts" : "video"}.mp4`;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(link.href), 5000);
-      }
+      if (!bufferTarget.buffer) throw new Error("Не удалось получить готовый MP4");
+      if (videoUrl) URL.revokeObjectURL(videoUrl);
+      setVideoUrl(URL.createObjectURL(new Blob([bufferTarget.buffer], { type: "video/mp4" })));
       setRenderProgress(1);
-      setMessage(`Гото: один MP4 ${aspect} собран${audioFile ? " с твоей озвучкой" : " без озвучки"}.`);
+      setMessage(`Готово: один MP4 ${aspect} собран${soundtrack ? " с озвучкой" : " без озвучки"}.`);
+      return true;
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") setMessage("Сохранение MP4 отменено.");
       else setMessage(error instanceof Error ? `Сборка не удалась: ${error.message}` : "Сборка MP4 не удалась");
+      return false;
     } finally {
       setIsRendering(false);
     }
   }
+
+  async function createWholeVideo() {
+    const list = keyList();
+    if (!script.trim()) { setMessage("Вставь текст для озвучки."); return; }
+    if (!list.length) { setShowKeys(true); return; }
+    setVideoUrl("");
+    setPipelineProgress(2);
+    setPipelineStage("voice");
+    setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceTextForScript(script)).length} частей…`);
+    setVoiceError("");
+    try {
+      let soundtrack = audioFile;
+      let duration = audioDuration;
+      if (!soundtrack) {
+        soundtrack = await requestLongVoiceTrack(list, voiceTextForScript(script), targetDuration, (completed, total) => {
+          setPipelineProgress(2 + (completed / total) * 16);
+          setPipelineLabel(`Создаю озвучку: часть ${completed} из ${total}`);
+        });
+        duration = await measureAudio(soundtrack);
+        if (splitVoiceText(script).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
+          setPipelineLabel(`Корректирую темп озвучки: было ${clock(duration)}, нужно ${clock(targetDuration)}…`);
+          soundtrack = await requestVoiceTrack(list, script, targetDuration, duration);
+          duration = await measureAudio(soundtrack);
+        }
+        attachAudio(soundtrack);
+      }
+      duration = targetDuration;
+      setPipelineProgress(20);
+      setPipelineStage("frames");
+      setPipelineLabel(`Создаю ${frameCount} кадров в закреплённом стиле канала…`);
+      const plan = splitIntoScenes(script, frameCount, duration, style, direction, aspect);
+      setScenes(plan);
+      setSelectedId(plan[0]?.id || null);
+      let generated = await generateAll(plan, list, (completed, total) => {
+        setPipelineProgress(20 + (completed / total) * 58);
+        setPipelineLabel(`Создаю кадры: ${completed} из ${total}`);
+      });
+      for (let retry = 1; generated && generated.some((scene) => !scene.image) && retry <= 3; retry++) {
+        const missing = generated.filter((scene) => !scene.image).length;
+        setPipelineLabel(`Повторяю ${missing} недостающих кадров · попытка ${retry} из 3…`);
+        generated = await generateAll(generated, list, (completed, total) => {
+          setPipelineProgress(20 + (completed / total) * 58);
+          setPipelineLabel(`Повторяю недостающие кадры: ${completed} из ${total}`);
+        });
+      }
+      if (!generated || generated.some((scene) => !scene.image)) throw new Error("Не все кадры создались. Открой «Исправить отдельные кадры» и повтори красные кадры.");
+      setPipelineProgress(80);
+      setPipelineStage("render");
+      setPipelineLabel("Собираю кадры и озвучку в один MP4…");
+      const rendered = await renderVideo(generated, soundtrack, duration);
+      if (!rendered) throw new Error("Не удалось собрать MP4");
+      setPipelineProgress(100);
+      setPipelineStage("done");
+      setPipelineLabel("Готовое видео создано");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Создание видео остановилось";
+      setPipelineStage("error");
+      setPipelineLabel(reason);
+      setVoiceError(reason);
+      setMessage(`Видео не создано: ${reason}`);
+      setIsGenerating(false);
+      setIsRendering(false);
+    }
+  }
+
+  async function continueMissingFrames() {
+    const list = keyList();
+    if (!list.length) { setShowKeys(true); return; }
+    if (!audioFile) { setMessage("Готовая озвучка не найдена в этой вкладке. Сначала создай или загрузи аудиодорожку."); return; }
+    if (!scenes.length) { setMessage("Список кадров пуст. Сначала создай план видео."); return; }
+    setPipelineStage("frames");
+    setPipelineProgress(20 + (done / scenes.length) * 58);
+    setVoiceError("");
+    try {
+      let recovered = scenes;
+      for (let retry = 1; recovered.some((scene) => !scene.image) && retry <= 4; retry++) {
+        const missing = recovered.filter((scene) => !scene.image).length;
+        setPipelineLabel(`Продолжаю только ${missing} недостающих кадров · попытка ${retry} из 4…`);
+        const next = await generateAll(recovered, list, (completed, total) => {
+          setPipelineProgress(20 + (completed / total) * 58);
+          setPipelineLabel(`Готово кадров: ${completed} из ${total}`);
+        });
+        if (!next) throw new Error("Не удалось продолжить очередь кадров");
+        recovered = next;
+      }
+      const missing = recovered.filter((scene) => !scene.image).length;
+      if (missing) throw new Error(`Осталось кадров с ошибкой: ${missing}. Нажми «Продолжить» ещё раз.`);
+      setScenes(recovered);
+      setPipelineStage("render");
+      setPipelineProgress(80);
+      setPipelineLabel("Все кадры готовы. Собираю MP4 с сохранённой озвучкой…");
+      const rendered = await renderVideo(recovered, audioFile, targetDuration);
+      if (!rendered) throw new Error("Не удалось собрать MP4");
+      setPipelineProgress(100);
+      setPipelineStage("done");
+      setPipelineLabel("Готовое видео создано");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Продолжение кадров остановилось";
+      setPipelineStage("error");
+      setPipelineLabel(reason);
+      setMessage(reason);
+    }
+  }
+
+  const pipelineRunning = pipelineStage === "voice" || pipelineStage === "frames" || pipelineStage === "render";
+  const pipelineIndex = pipelineStage === "voice" ? 0 : pipelineStage === "frames" ? 1 : pipelineStage === "render" ? 2 : pipelineStage === "done" ? 3 : -1;
 
   return (
     <main>
@@ -308,52 +914,69 @@ export default function Home() {
         <div className="headerActions"><button className="plain" onClick={() => setShowKeys(true)}>Ключи Google</button><i /> <span>gemini-3.1-flash-image</span></div>
       </header>
 
-      <section className="hero">
-        <p>ДЛИННЫЙ ФОРМАТ · ДО 30 МИНУТ</p>
-        <h1>Твой сценарий → готовый видеоряд</h1>
-        <span>Сайт привязывает каждый кадр к тексту и точной длине твоей озвучки.</span>
+      <section className="quickHero">
+        <p>СОЗДАНИЕ ВИДЕО В ОДНОМ ОКНЕ</p>
+        <h1>Вставь текст — получи готовый ролик</h1>
+        <span>Голос, кадры и MP4 идут по порядку. Никакого водяного знака.</span>
       </section>
 
-      <section className="editor">
-        <div className="source card">
-          <div className="cardTitle"><b>1</b><div><h2>Добавь материал</h2><p>Никаких готовых сцен — только твой текст.</p></div></div>
-          <label>О чём должен быть ролик
-            <input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="Например: психологическая история о денежных ошибках" />
-          </label>
-          <label>Сценарий
-            <textarea value={script} onChange={(e) => { setScript(e.target.value); setScenes([]); }} placeholder="Вставь сюда свой полный сценарий…" />
-            <small>{wordCount} слов · расчётная длина {clock(estimatedDuration)}</small>
-          </label>
-          <label className={`drop ${audioName ? "filled" : ""}`}>
-            <input type="file" accept="audio/*" onChange={handleAudio} />
-            <span>♪</span><div><strong>{audioName || "Загрузить озвучку"}</strong><small>{audioName ? `Точная длина: ${clock(audioDuration)}` : "MP3, WAV или M4A — голос не изменяется"}</small></div><em>{audioName ? "Заменить" : "Выбрать"}</em>
-          </label>
+      <section className="quickStudio card">
+        <div className="quickStep scriptStep">
+          <div className="quickTitle"><b>1</b><div><h2>Текст для озвучки</h2><p>Вставляй сюда именно тот текст, который должен произнести голос.</p></div></div>
+          <label className="textFileImport"><input type="file" accept=".txt,.md,text/plain,text/markdown" onChange={importTextFile} /><b>Загрузить файл с компьютера</b><span>TXT с озвучкой, промптами или готовым проектом</span></label>
+          <textarea className="mainScript" value={script} onChange={(e) => { setScript(e.target.value); setScenes([]); }} placeholder="Вставь сюда полный текст ролика…" autoFocus />
+          <div className="scriptMeta"><span>{wordCount} слов</span><span>План: {clock(estimatedDuration)}</span></div>
+          <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { setDirection(e.target.value); setScenes([]); }} placeholder={"Напиши сцены отдельными строками:\n1. A thoughtful man standing in a vast library...\n2. The same man studying several documents...\n3. ..."} /><small>Каждая пронумерованная строка — отдельный кадр. Для выбранной длины нужно {frameCount} строк: новая сцена строго каждые 7 секунд. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
         </div>
 
-        <aside className="setup card">
-          <div className="cardTitle compact"><b>2</b><div><h2>Настройки</h2><p>Один стиль для всего ролика.</p></div></div>
-          <label>Визуальный стиль<textarea className="style" value={style} onChange={(e) => setStyle(e.target.value)} /></label>
-          <div className="row"><label>Длина кадра<select value={shotLength} onChange={(e) => setShotLength(Number(e.target.value))}><option value={8}>8 сек</option><option value={12}>12 сек</option><option value={15}>15 сек</option><option value={20}>20 сек</option></select></label><label>Формат<select value={aspect} onChange={(e) => { setAspect(e.target.value); setScenes([]); }}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select></label><label>Качество<select value={quality} onChange={(e) => setQuality(e.target.value)}><option>1K</option><option>2K</option><option>4K</option></select></label></div>
-          <button className="toggleLine" onClick={() => setSubtitles(!subtitles)}><span><strong>Субтитры</strong><small>Можно скачать SRT или отключить</small></span><i className={subtitles ? "on" : ""}><b /></i></button>
-          <div className="numbers"><span><small>Длина</small><b>{clock(estimatedDuration)}</b></span><span><small>Кадров</small><b>{script ? expectedScenes : 0}</b></span><span><small>Формат</small><b>{aspect}</b></span></div>
-          <button className="primary" onClick={buildPlan}>Создать план кадров <span>→</span></button>
-        </aside>
-      </section>
+        <div className="quickDivider" />
 
-      <section className="storyboard card">
-        <div className="storyHead"><div className="cardTitle compact"><b>3</b><div><h2>Видео</h2><p>{scenes.length ? `${done} из ${scenes.length} кадров готово · результат — один MP4` : "Появится после твоего сценария"}</p></div></div>{scenes.length > 0 && <div className="storyActions"><button className="plain" onClick={exportProject}>JSON</button>{subtitles && <button className="plain" onClick={exportSrt}>SRT</button>}<button className="generate" onClick={generateAll} disabled={isGenerating || isRendering}>{isGenerating ? `Nano Banana… ${done}/${scenes.length}` : "1. Создать кадры"}</button><button className="assemble" onClick={renderVideo} disabled={isRendering || isGenerating}>{isRendering ? `Сборка MP4… ${Math.round(renderProgress * 100)}%` : `2. Скачать MP4 ${aspect}`}</button></div>}</div>
-        {message && <div className="notice">{message}</div>}
-        {!scenes.length ? <div className="empty"><span>+</span><strong>Здесь пока пусто</strong><p>Вставь свой текс выше и нажми «Создать план». Сайт не добавляет чужие сцены.</p></div> : (
-          <div className="workarea">
-            <div className="sceneGrid">{scenes.map((scene) => <button key={scene.id} onClick={() => setSelectedId(scene.id)} className={`shot ${scene.id === selectedId ? "selected" : ""}`}><div className={`shotImage ${aspect === "9:16" ? "vertical" : ""}`}>{scene.image ? <img src={scene.image} alt={`Кадр ${scene.id}`} /> : <span>{scene.status === "working" ? "…" : String(scene.id).padStart(2,"0")}</span>}<i className={scene.status} /></div><small>{clock(scene.start)}–{clock(scene.end)}</small><p>{scene.text}</p>{scene.error && <em>{scene.error}</em>}</button>)}</div>
-            {selected && <aside className="inspector"><div className={`preview ${aspect === "9:16" ? "vertical" : ""}`}>{selected.image ? <img src={selected.image} alt="Предпросмотр" /> : <div>Кадр {selected.id}</div>}{subtitles && <strong>{selected.text}</strong>}</div><label>Текст кадра<textarea value={selected.text} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, text: e.target.value } : item))} /></label><label>Промпт Nano Banana<textarea className="prompt" value={selected.prompt} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, prompt: e.target.value, status: "ready" } : item))} /></label><button className="generate one" onClick={() => { const list = keys.split(/[\n,;]+/).filter(Boolean); if (!list.length) setShowKeys(true); else generateScene(selected, list[selected.id % list.length]); }}>Создать этот кадр</button></aside>}
+        <div className="quickStep">
+          <div className="quickTitle"><b>2</b><div><h2>Озвучка</h2><p>Выбери голос и нажми большую кнопку. Он прочитает текст сверху.</p></div></div>
+          <div className="simpleVoiceRow">
+            <label>Голос<select value={voice} onChange={(e) => setVoice(e.target.value)}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+            <button className="previewButton" onClick={previewVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoicePreview ? "Создаю пример…" : "▶ Пример голоса"}</button>
+            <button className="createVoiceButton" onClick={generateVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoice ? "Озвучиваю текст…" : "Создать озвучку текста"}</button>
           </div>
-        )}
+          <div className={`voiceResult ${isGeneratingVoicePreview || isGeneratingVoice ? "working" : voiceError ? "error" : voicePreviewUrl ? "ready" : ""}`}>
+            {isGeneratingVoicePreview ? <><b><i /> Создаю короткий пример…</b><small>Плеер появится здесь.</small></> : isGeneratingVoice ? <><b><i /> Озвучиваю весь текст сверху…</b><small>Не закрывай страницу.</small></> : voiceError ? <><b>Озвучка остановилась</b><small>{voiceError}</small>{voiceError.includes("current location") && <em>Включи VPN с поддерживаемой страной.</em>}{voiceError.includes("403") && <em>Переключи VPN на другой сервер и попробуй снова.</em>}<button className="retryVoiceInline" onClick={generateVoice}>Продолжить озвучку</button></> : voicePreviewUrl ? <><b>✓ Пример {voice}</b><audio className="voicePreview" ref={voicePreviewRef} src={voicePreviewUrl} controls /></> : <><b>Пример появится здесь</b><small>Кнопка «Пример голоса» читает короткую тестовую фразу.</small></>}
+          </div>
+          {audioUrl && <div className="mainAudio"><div><b>✓ Озвучка ролика готова</b><small>{clock(audioDuration)} · {audioName}</small><a href={audioUrl} download="cineframe-full-voice.wav">Скачать полную WAV</a></div><audio ref={audioRef} src={audioUrl} controls onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)} /></div>}
+          <label className={`compactUpload ${audioName ? "filled" : ""}`}><input type="file" accept="audio/*" onChange={handleAudio} /><span>Или загрузить свою MP3 / WAV</span></label>
+        </div>
+
+        <div className="quickDivider" />
+
+        <div className="quickStep">
+          <div className="quickTitle"><b>3</b><div><h2>Параметры видео</h2><p>Только три главные настройки.</p></div></div>
+          <div className="bigControls">
+            <label>Длительность<select value={targetDuration} onChange={(e) => { setTargetDuration(Number(e.target.value)); setAudioDuration(0); setAudioFile(null); setAudioUrl(""); setAudioName(""); setScenes([]); }}><option value={30}>30 секунд</option><option value={60}>1 минута</option><option value={180}>3 минуты</option><option value={300}>5 минут</option><option value={600}>10 минут</option><option value={900}>15 минут</option><option value={1200}>20 минут</option><option value={1800}>30 минут</option></select><small>{audioDuration ? `Озвучка ${clock(audioDuration)} · видео ${clock(targetDuration)}` : "Это точная длина готового MP4"}</small></label>
+            <label>Смена кадра<div className="staticControl">Каждые 7 секунд</div><small>{frameCount} сцен на {clock(targetDuration)}</small></label>
+            <label>Формат<select value={aspect} onChange={(e) => { setAspect(e.target.value); setScenes([]); }}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
+          </div>
+          <div className="quickOptions"><label><input type="checkbox" checked={subtitles} onChange={(e) => setSubtitles(e.target.checked)} /> Субтитры</label><span>Без водяного знака</span></div>
+          <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => setQuality(e.target.value)}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => setVoiceDirection(e.target.value)} /></label><div className="lockedStyle"><b>Стиль канала закреплён</b><small>Oil painting · chiaroscuro · red & teal · visible brushstrokes · film grain</small></div></details>
+          <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
+          <div className={`pipelinePanel ${pipelineStage}`} aria-live="polite">
+            <div className="pipelineSteps">
+              {["Озвучка", "Кадры", "Сборка MP4", "Готово"].map((label, index) => <div key={label} className={`pipelineStep ${pipelineStage === "error" ? "" : index < pipelineIndex || pipelineStage === "done" ? "done" : index === pipelineIndex ? "active" : ""}`}><i>{index < pipelineIndex || pipelineStage === "done" ? "✓" : index + 1}</i><span>{label}</span></div>)}
+            </div>
+            <div className="progressTrack"><div className="progressFill" style={{ width: `${pipelineProgress}%` }} /></div>
+            <div className="pipelineStatus"><b>{pipelineStage === "error" ? "Ошибка" : `${Math.round(pipelineProgress)}%`}</b><span>{pipelineLabel}</span></div>
+            {pipelineStage === "error" && (voiceError.includes("current location") || voiceError.includes("403")) && <p className="pipelineHint">Google блокирует озвучку для текущего IP. Переключи VPN на США или Европу и нажми кнопку ещё раз.</p>}
+          </div>
+          {scenes.length > 0 && done < scenes.length && audioFile && <button className="resumeFramesButton" onClick={continueMissingFrames} disabled={pipelineRunning || isGenerating || isRendering}>ПРОДОЛЖИТЬ {scenes.length - done} НЕДОСТАЮЩИХ КАДРОВ</button>}
+        </div>
       </section>
 
-      {audioUrl && <div className="player"><audio ref={audioRef} src={audioUrl} controls onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)} /><span>{currentScene ? `Кадр ${currentScene.id}` : "Озвучка"}</span></div>}
+      <section className="storyboard card quickStoryboard">
+        <div className="storyHead"><div><h2>Готовое видео</h2><p>{videoUrl ? `${clock(estimatedDuration)} · ${aspect} · озвучка и кадры в одном файле` : pipelineRunning ? pipelineLabel : "Здесь появится один собранный ролик"}</p></div>{videoUrl && <div className="storyActions">{subtitles && scenes.length > 0 && <button className="plain" onClick={exportSrt}>Скачать SRT</button>}<a className="downloadVideo downloadReady" href={videoUrl} download="cineframe-video.mp4">Скачать MP4</a></div>}</div>
+        {message && <div className="notice">{message}</div>}
+        {videoUrl ? <div className={`finalVideoCard ${aspect === "9:16" ? "vertical" : ""}`}><video src={videoUrl} controls playsInline /><div><b>✓ Ролик собран целиком</b><span>Кадры, тайминг и озвучка уже внутри MP4.</span></div></div> : <div className="compactEmpty"><span>{pipelineRunning ? `${Math.round(pipelineProgress)}%` : "Видео пока нет"}</span><p>{pipelineRunning ? pipelineLabel : "Вставь текст и промпты сцен, затем нажми «Создать готовое видео»."}</p></div>}
+        {scenes.length > 0 && <details className="framesEditor"><summary>Исправить отдельные кадры ({done}/{scenes.length})</summary><div className="framesEditorBody"><div className="framesEditorActions"><span>Открывай это только если нужно заменить конкретную картинку.</span><button className="plain" onClick={() => generateAll() } disabled={isGenerating || pipelineRunning}>Повторить незавершённые</button><button className="plain" onClick={() => renderVideo()} disabled={isRendering || isGenerating || done !== scenes.length}>Пересобрать MP4</button></div><div className="workarea"><div className="sceneGrid">{scenes.map((scene) => <button key={scene.id} onClick={() => setSelectedId(scene.id)} className={`shot ${scene.id === selectedId ? "selected" : ""}`}><div className={`shotImage ${aspect === "9:16" ? "vertical" : ""}`}>{scene.image ? <img src={scene.image} alt={`Кадр ${scene.id}`} /> : <span>{scene.status === "working" ? "…" : String(scene.id).padStart(2,"0")}</span>}<i className={scene.status} /></div><small>{clock(scene.start)}–{clock(scene.end)}</small><p>{scene.text}</p>{scene.error && <em>{scene.error}</em>}</button>)}</div>{selected && <aside className="inspector"><div className={`preview ${aspect === "9:16" ? "vertical" : ""}`}>{selected.image ? <img src={selected.image} alt="Предпросмотр" /> : <div>Кадр {selected.id}</div>}{subtitles && <strong>{selected.text}</strong>}</div><label>Текст кадра<textarea value={selected.text} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, text: e.target.value } : item))} /></label><label>Промпт изображения<textarea className="prompt" value={selected.prompt} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, prompt: e.target.value, status: "ready" } : item))} /></label><button className="generate one" onClick={() => { const list = keyList(); if (!list.length) setShowKeys(true); else void generateScene(selected, list); }}>Повторить этот кадр</button></aside>}</div></div></details>}
+      </section>
 
-      {showKeys && <div className="modal" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowKeys(false); }}><div className="modalBox"><button className="close" onClick={() => setShowKeys(false)}>×</button><h2>Ключи Google AI</h2><p>Вставь один или несколько ключей. При длинном ролике они меняются по кругу. Ключи хранятся только в твоём браузере.</p><textarea value={keys} onChange={(e) => setKeys(e.target.value)} placeholder={"AIza...\nAIza..."} /><button className="primary" onClick={saveKeys}>Сохранить</button></div></div>}
+      {showKeys && <div className="modal" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowKeys(false); }}><div className="modalBox"><button className="close" onClick={() => setShowKeys(false)}>×</button><h2>Ключи Google AI</h2><p>Они используются и для кадров, и для озвучки. Каждый следующий запрос берёт следующий ключ по кругу. Ключи хранятся только в этом браузере.</p><label className="csvImport"><input type="file" accept=".csv,text/csv" onChange={importKeys} /><span>Импортировать CSV с ключами</span><small>{keyList().length ? `Сейчас сохранено: ${keyList().length}` : "Подойдёт gemini_api_keys_50_2026-07-31.csv"}</small></label><textarea value={keys} onChange={(e) => setKeys(e.target.value)} placeholder={"AIza...\nAIza..."} /><button className="primary" onClick={saveKeys}>Сохранить</button></div></div>}
     </main>
   );
 }
