@@ -16,7 +16,7 @@ function findImage(value: unknown): { data: string; mime: string } | null {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { apiKey?: string; prompt?: string; quality?: string };
+    const body = await request.json() as { apiKey?: string; prompt?: string; quality?: string; aspectRatio?: string };
     if (!body.apiKey?.trim()) return Response.json({ error: "Нужен Google API key" }, { status: 400 });
     if (!body.prompt?.trim()) return Response.json({ error: "Промпт пуст" }, { status: 400 });
     const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         model: "gemini-3.1-flash-image",
         input: body.prompt,
-        response_format: { type: "image", mime_type: "image/jpeg", aspect_ratio: "16:9", image_size: ["1K", "2K", "4K"].includes(body.quality || "") ? body.quality : "1K" },
+        response_format: { type: "image", mime_type: "image/jpeg", aspect_ratio: body.aspectRatio === "9:16" ? "9:16" : "16:9", image_size: ["1K", "2K", "4K"].includes(body.quality || "") ? body.quality : "1K" },
       }),
     });
     const result = await response.json() as unknown;

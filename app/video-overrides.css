@@ -1,0 +1,47 @@
+.row {
+  grid-template-columns: 1fr 1.25fr 0.75fr;
+  gap: 8px;
+}
+
+.row select {
+  padding-inline: 7px;
+}
+
+.generate:disabled,
+.assemble:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.assemble {
+  border: 1px solid #5d8e70;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #315d43, #477d5b);
+  color: #effff4;
+  padding: 10px 13px;
+  font-size: 10px;
+}
+
+.assemble:hover {
+  filter: brightness(1.1);
+}
+
+.shotImage.vertical {
+  aspect-ratio: 9 / 16;
+}
+
+.preview.vertical {
+  width: 66%;
+  margin-inline: auto;
+  aspect-ratio: 9 / 16;
+}
+
+@media (max-width: 580px) {
+  .row {
+    grid-template-columns: 1fr;
+  }
+
+  .preview.vertical {
+    width: 82%;
+  }
+}
