@@ -36,12 +36,12 @@ type ExportOptions = {
   readyVideo: Blob;
   aspect: string;
   duration: number;
-  subtitles: boolean;
   onProgress?: (message: string) => void;
 };
 
 const jsonClone = <T,>(value: T): T => structuredClone(value);
 const uuid = () => crypto.randomUUID().toUpperCase();
+const keyframeId = () => crypto.randomUUID().replaceAll("-", "").toUpperCase();
 const localId = () => crypto.randomUUID().toLowerCase();
 const microseconds = (seconds: number) => Math.max(1, Math.round(seconds * 1_000_000));
 
@@ -98,8 +98,7 @@ async function findTemplate(root: DirectoryHandle, rootMeta: JsonRecord) {
       const videoTrack = (content.tracks || []).find((track: JsonRecord) => track.type === "video" && track.segments?.length);
       const videoMaterial = content.materials?.videos?.[0];
       if (!videoTrack || !videoMaterial) continue;
-      const hasText = Boolean((content.tracks || []).find((track: JsonRecord) => track.type === "text" && track.segments?.length) && content.materials?.texts?.length);
-      const score = (hasText ? 10 : 0) + (meta.tm_draft_modified || 0) / 1e18;
+      const score = (meta.tm_draft_modified || 0) / 1e18;
       if (!best || score > best.score) best = { directory, content, meta, score };
     } catch {
       // A recycle-bin folder or an incomplete draft is not a usable template.
@@ -107,25 +106,6 @@ async function findTemplate(root: DirectoryHandle, rootMeta: JsonRecord) {
   }
   if (!best) throw new Error("В этой папке не нашёлся ни один обычный проект CapCut.");
   return best;
-}
-
-function updateRichText(material: JsonRecord, text: string, durationUs: number) {
-  try {
-    const content = JSON.parse(material.content || "{}") as JsonRecord;
-    content.text = text;
-    for (const style of content.styles || []) style.range = [0, text.length];
-    material.content = JSON.stringify(content);
-  } catch {
-    material.content = JSON.stringify({ styles: [], text });
-  }
-  material.global_alpha = 1;
-  material.text_alpha = 1;
-  material.line_max_width = 0.82;
-  material.words = {
-    start_time: [0],
-    end_time: [Math.round(durationUs / 1000)],
-    text: [text],
-  };
 }
 
 export function buildCapCutDraft(
@@ -143,11 +123,9 @@ export function buildCapCutDraft(
   const sourceVideoMaterial = (template.materials?.videos || []).find((item: JsonRecord) => item.id === sourceVideoSegment?.material_id) || template.materials?.videos?.[0];
   if (!sourceVideoTrack || !sourceVideoSegment || !sourceVideoMaterial) throw new Error("В шаблоне CapCut нет видеодорожки.");
 
-  const sourceTextTrack = (template.tracks || []).find((track: JsonRecord) => track.type === "text" && track.segments?.length);
-  const sourceTextSegment = sourceTextTrack?.segments?.[0];
-  const sourceTextMaterial = (template.materials?.texts || []).find((item: JsonRecord) => item.id === sourceTextSegment?.material_id) || template.materials?.texts?.[0];
   const width = options.aspect === "9:16" ? 1080 : 1920;
   const height = options.aspect === "9:16" ? 1920 : 1080;
+  const isLongForm = options.aspect === "16:9";
   const durationUs = microseconds(options.duration);
   const nowUs = Date.now() * 1000;
   const draftId = uuid();
@@ -195,7 +173,7 @@ export function buildCapCutDraft(
   const virtualMaterialIds: string[] = [];
   const visualTrack = jsonClone(sourceVideoTrack);
   visualTrack.id = uuid();
-  visualTrack.name = "01 · КАДРЫ ОТДЕЛЬНО";
+  visualTrack.name = isLongForm ? "01 · КАДРЫ ±15°" : "01 · КАДРЫ БЕЗ НАКЛОНА";
   visualTrack.is_default_name = false;
   visualTrack.segments = [];
 
@@ -227,14 +205,44 @@ export function buildCapCutDraft(
     segment.source_timerange = { start: 0, duration: clipDuration };
     segment.target_timerange = { start: clipStart, duration: clipDuration };
     segment.extra_material_refs = cloneRefs(sourceVideoSegment.extra_material_refs || []);
-    segment.common_keyframes = [];
+    const easeHandle = Math.round(clipDuration * 0.42);
+    segment.common_keyframes = isLongForm ? [{
+      id: keyframeId(),
+      material_id: "",
+      property_type: "KFTypeRotation",
+      keyframe_list: [
+        {
+          curveType: "FreeCurveInOut",
+          graphID: "",
+          left_control: { x: 0, y: 0 },
+          right_control: { x: easeHandle, y: 0 },
+          id: keyframeId(),
+          time_offset: 0,
+          values: [15],
+        },
+        {
+          curveType: "FreeCurveInOut",
+          graphID: "",
+          left_control: { x: -easeHandle, y: 0 },
+          right_control: { x: 0, y: 0 },
+          id: keyframeId(),
+          time_offset: clipDuration,
+          values: [-15],
+        },
+      ],
+    }] : [];
     segment.keyframe_refs = [];
     segment.render_index = 0;
     segment.track_render_index = 0;
     segment.volume = 0;
     segment.last_nonzero_volume = 1;
     segment.visible = true;
-    segment.clip = { ...(segment.clip || {}), alpha: 1 };
+    segment.clip = {
+      ...(segment.clip || {}),
+      alpha: 1,
+      rotation: 0,
+      scale: isLongForm ? { x: 1.43, y: 1.43 } : { x: 1, y: 1 },
+    };
     visualTrack.segments.push(segment);
 
     metaMaterials.push({
@@ -311,40 +319,7 @@ export function buildCapCutDraft(
   });
   virtualMaterialIds.push(audioLocalId);
 
-  const tracks: JsonRecord[] = [visualTrack, audioTrack];
-  if (options.subtitles && sourceTextTrack && sourceTextSegment && sourceTextMaterial) {
-    const textTrack = jsonClone(sourceTextTrack);
-    textTrack.id = uuid();
-    textTrack.name = "03 · СУБТИТРЫ";
-    textTrack.is_default_name = false;
-    textTrack.segments = options.scenes.map((scene, index) => {
-      const clipDuration = microseconds(Math.max(0.001, scene.end - scene.start));
-      const textMaterial = jsonClone(sourceTextMaterial);
-      textMaterial.id = uuid();
-      textMaterial.group_id = uuid();
-      updateRichText(textMaterial, scene.text, clipDuration);
-      content.materials.texts.push(textMaterial);
-      const segment = jsonClone(sourceTextSegment);
-      segment.id = uuid();
-      segment.material_id = textMaterial.id;
-      segment.target_timerange = { start: microseconds(scene.start), duration: clipDuration };
-      segment.source_timerange = null;
-      segment.extra_material_refs = cloneRefs(sourceTextSegment.extra_material_refs || []);
-      segment.common_keyframes = [];
-      segment.keyframe_refs = [];
-      segment.render_index = 14000 + index;
-      segment.track_render_index = 2;
-      segment.clip = {
-        ...(segment.clip || {}),
-        alpha: 1,
-        scale: { x: options.aspect === "9:16" ? 0.78 : 0.9, y: options.aspect === "9:16" ? 0.78 : 0.9 },
-        transform: { x: 0, y: options.aspect === "9:16" ? -0.62 : -0.72 },
-      };
-      return segment;
-    });
-    tracks.push(textTrack);
-  }
-  content.tracks = tracks;
+  content.tracks = [visualTrack, audioTrack];
 
   const draftMeta = jsonClone(templateMeta);
   Object.assign(draftMeta, {

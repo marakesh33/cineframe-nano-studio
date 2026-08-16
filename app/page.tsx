@@ -228,7 +228,6 @@ export default function Home() {
   const frameCount = frameCountForDuration(targetDuration);
   const [quality, setQuality] = useState("1K");
   const [aspect, setAspect] = useState("16:9");
-  const [subtitles, setSubtitles] = useState(true);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [keys, setKeys] = useState("");
@@ -608,28 +607,6 @@ export default function Home() {
     return merged;
   }
 
-  function download(name: string, body: string, type: string) {
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([body], { type }));
-    link.download = name;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  }
-
-  function exportProject() {
-    const clean = scenes.map(({ image, ...scene }) => ({ ...scene, imageFile: image ? `scene-${String(scene.id).padStart(3, "0")}.jpg` : null }));
-    download("cineframe-project.json", JSON.stringify({ direction, style, duration: estimatedDuration, aspect, subtitles, scenes: clean }, null, 2), "application/json");
-  }
-
-  function exportSrt() {
-    const stamp = (value: number) => {
-      const ms = Math.round(value * 1000);
-      const h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, s = Math.floor(ms / 1000) % 60, x = ms % 1000;
-      return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")},${String(x).padStart(3,"0")}`;
-    };
-    download("subtitles.srt", scenes.map((scene, index) => `${index + 1}\n${stamp(scene.start)} --> ${stamp(scene.end)}\n${scene.text}\n`).join("\n"), "text/plain;charset=utf-8");
-  }
-
   async function renderVideo(videoScenes: Scene[] = scenes, soundtrack: File | null = audioFile, durationOverride = estimatedDuration) {
     if (!videoScenes.length || videoScenes.some((scene) => !scene.image)) {
       setMessage("Снача создай все кадры. После этого сайт соберёт их в один MP4.");
@@ -641,7 +618,9 @@ export default function Home() {
     }
     setIsRendering(true);
     setRenderProgress(0);
-    setMessage("Собираю единый MP4: движение камеры, переходы, озвучка и субтитры…");
+    setMessage(aspect === "16:9"
+      ? "Собираю лонг MP4: плавное покачивание кадров от +15° до −15° и озвучка…"
+      : "Собираю Shorts MP4 без наклона кадров, с озвучкой…");
     try {
       const width = aspect === "9:16" ? 720 : 1280;
       const height = aspect === "9:16" ? 1280 : 720;
@@ -689,82 +668,20 @@ export default function Home() {
       await output.start();
       if (audioSource && decodedAudio) await audioSource.add(decodedAudio);
 
-      const drawCover = (image: HTMLImageElement, progress: number, index: number, opacity = 1) => {
+      const drawCover = (image: HTMLImageElement, progress: number) => {
         const base = Math.max(width / image.naturalWidth, height / image.naturalHeight);
-        const scale = base * (1.035 + progress * 0.055);
+        const isLongForm = aspect === "16:9";
+        const scale = base * (isLongForm ? 1.43 : 1);
         const drawnWidth = image.naturalWidth * scale;
         const drawnHeight = image.naturalHeight * scale;
-        const drift = (progress - 0.5) * width * 0.025 * (index % 2 ? 1 : -1);
-        const x = (width - drawnWidth) / 2 + drift;
-        const y = (height - drawnHeight) / 2 - (progress - 0.5) * height * 0.012;
-        context.globalAlpha = opacity;
-        context.drawImage(image, x, y, drawnWidth, drawnHeight);
-        context.globalAlpha = 1;
+        const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
+        const rotation = isLongForm ? (15 - eased * 30) * Math.PI / 180 : 0;
+        context.save();
+        context.translate(width / 2, height / 2);
+        context.rotate(rotation);
+        context.drawImage(image, -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
+        context.restore();
       };
-
-      const drawSubtitle = (text: string) => {
-        const fontSize = aspect === "9:16" ? 38 : 36;
-        context.font = `700 ${fontSize}px Arial`;
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        const maxWidth = width * 0.82;
-        const words = text.split(/\s+/);
-        const lines: string[] = [];
-        let line = "";
-        for (const word of words) {
-          const candidate = line ? `${line} ${word}` : word;
-          if (context.measureText(candidate).width > maxWidth && line) { lines.push(line); line = word; }
-          else line = candidate;
-        }
-        if (line) lines.push(line);
-        const visible = lines.slice(0, 3);
-        const startY = height - (aspect === "9:16" ? 150 : 72) - (visible.length - 1) * fontSize * 0.62;
-        visible.forEach((item, index) => {
-          const y = startY + index * fontSize * 1.18;
-          context.lineJoin = "round";
-          context.lineWidth = 9;
-          context.strokeStyle = "rgba(0,0,0,.82)";
-          context.strokeText(item, width / 2, y);
-          context.fillStyle = "#fffdf5";
-          context.fillText(item, width / 2, y);
-        });
-      };
-
-      const drawOpeningQuote = (quote: string, author: string) => {
-        const fontSize = aspect === "9:16" ? 42 : 39;
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        const maxWidth = width * (aspect === "9:16" ? 0.82 : 0.78);
-        const words = quote.replace(/^«|»[.!?]?$/g, "").split(/\s+/);
-        const lines: string[] = [];
-        let line = "";
-        context.font = `700 ${fontSize}px Arial`;
-        for (const word of words) {
-          const candidate = line ? `${line} ${word}` : word;
-          if (context.measureText(candidate).width > maxWidth && line) { lines.push(line); line = word; }
-          else line = candidate;
-        }
-        if (line) lines.push(line);
-        const lineHeight = fontSize * 1.17;
-        const firstY = height * (aspect === "9:16" ? 0.29 : 0.32) - ((lines.length - 1) * lineHeight) / 2;
-        lines.forEach((item, index) => {
-          const y = firstY + index * lineHeight;
-          context.lineJoin = "round";
-          context.lineWidth = 8;
-          context.strokeStyle = "rgba(0,0,0,.78)";
-          context.strokeText(item, width / 2, y);
-          context.fillStyle = "#f5f3ee";
-          context.fillText(item, width / 2, y);
-        });
-        context.font = `italic 500 ${Math.round(fontSize * 0.58)}px Arial`;
-        context.lineWidth = 5;
-        context.strokeStyle = "rgba(0,0,0,.8)";
-        context.strokeText(`— ${author.replace(/[.]$/, "")}`, width / 2, firstY + lines.length * lineHeight + fontSize * 0.45);
-        context.fillStyle = "#e3dfd7";
-        context.fillText(`— ${author.replace(/[.]$/, "")}`, width / 2, firstY + lines.length * lineHeight + fontSize * 0.45);
-      };
-
-      const openingQuote = extractOpeningQuote(videoScenes[0]?.text || "");
 
       let sceneIndex = 0;
       for (let frame = 0; frame < totalFrames; frame++) {
@@ -774,13 +691,7 @@ export default function Home() {
         const local = Math.max(0, Math.min(1, (timestamp - scene.start) / Math.max(0.001, scene.end - scene.start)));
         context.fillStyle = "#08090a";
         context.fillRect(0, 0, width, height);
-        drawCover(images[sceneIndex], local, sceneIndex);
-        if (local > 0.94 && sceneIndex < videoScenes.length - 1) {
-          const fade = (local - 0.94) / 0.06;
-          drawCover(images[sceneIndex + 1], 0, sceneIndex + 1, fade);
-        }
-        if (sceneIndex === 0 && openingQuote) drawOpeningQuote(openingQuote.quote, openingQuote.author);
-        else if (subtitles) drawSubtitle(scene.text);
+        drawCover(images[sceneIndex], local);
         await videoSource.add(timestamp, frameDuration, { keyFrame: frame % (fps * 2) === 0 });
         if (frame % fps === 0 || frame === totalFrames - 1) {
           const progress = (frame + 1) / totalFrames;
@@ -822,7 +733,6 @@ export default function Home() {
         readyVideo: videoBlob,
         aspect,
         duration: estimatedDuration,
-        subtitles,
         onProgress: setCapCutMessage,
       });
       setCapCutMessage(`✓ Проект «${projectName}» добавлен. Открой CapCut.`);
@@ -988,7 +898,7 @@ export default function Home() {
             <label>Смена кадра<div className="staticControl">Каждые 7 секунд</div><small>{frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { setAspect(e.target.value); setScenes([]); }}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
-          <div className="quickOptions"><label><input type="checkbox" checked={subtitles} onChange={(e) => setSubtitles(e.target.checked)} /> Субтитры</label><span>Без водяного знака</span></div>
+          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +15° → −15°" : "Shorts: кадры без наклона"}</strong><span>Без субтитров</span></div>
           <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => setQuality(e.target.value)}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => setVoiceDirection(e.target.value)} /></label><div className="lockedStyle"><b>Стиль канала закреплён</b><small>Oil painting · chiaroscuro · red & teal · visible brushstrokes · film grain</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
           <div className={`pipelinePanel ${pipelineStage}`} aria-live="polite">
@@ -1003,11 +913,16 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="motionDemo card">
+        <div><p>ТЕСТ ДВИЖЕНИЯ ДЛЯ ЛОНГОВ</p><h2>Вот так кадры 16:9 будут качаться в CapCut</h2><span>Каждая фотография медленно идёт от +15° к −15°. В Shorts 9:16 наклон отключён.</span></div>
+        <video src="/capcut-sway-demo.mp4" controls loop muted playsInline preload="metadata" />
+      </section>
+
       <section className="storyboard card quickStoryboard">
-        <div className="storyHead"><div><h2>Готовое видео</h2><p>{videoUrl ? `${clock(estimatedDuration)} · ${aspect} · озвучка и кадры в одном файле` : pipelineRunning ? pipelineLabel : "Здесь появится один собранный ролик"}</p></div>{videoUrl && <div className="storyActions">{subtitles && scenes.length > 0 && <button className="plain" onClick={exportSrt}>Скачать SRT</button>}<a className="downloadVideo downloadReady" href={videoUrl} download="cineframe-video.mp4">Скачать MP4</a></div>}</div>
+        <div className="storyHead"><div><h2>Готовое видео</h2><p>{videoUrl ? `${clock(estimatedDuration)} · ${aspect} · озвучка и анимированные кадры` : pipelineRunning ? pipelineLabel : "Здесь появится один собранный ролик"}</p></div>{videoUrl && <div className="storyActions"><a className="downloadVideo downloadReady" href={videoUrl} download="cineframe-video.mp4">Скачать MP4</a></div>}</div>
         {message && <div className="notice">{message}</div>}
         {videoUrl ? <div className={`finalVideoCard ${aspect === "9:16" ? "vertical" : ""}`}><video src={videoUrl} controls playsInline /><div><b>✓ Ролик собран целиком</b><span>Кадры, тайминг и озвучка уже внутри MP4.</span><button className="capcutButton" onClick={exportToCapCut} disabled={isExportingCapCut}>{isExportingCapCut ? "ДОБАВЛЯЮ В CAPCUT…" : "ДОБАВИТЬ ПРОЕКТ В CAPCUT"}</button><small className="capcutHint">Каждая фотография будет отдельным клипом на таймлайне.</small>{capCutMessage && <em className={`capcutStatus ${capCutMessage.startsWith("Не ") ? "error" : ""}`}>{capCutMessage}</em>}</div></div> : <div className="compactEmpty"><span>{pipelineRunning ? `${Math.round(pipelineProgress)}%` : "Видео пока нет"}</span><p>{pipelineRunning ? pipelineLabel : "Вставь текст и промпты сцен, затем нажми «Создать готовое видео»."}</p></div>}
-        {scenes.length > 0 && <details className="framesEditor"><summary>Исправить отдельные кадры ({done}/{scenes.length})</summary><div className="framesEditorBody"><div className="framesEditorActions"><span>Открывай это только если нужно заменить конкретную картинку.</span><button className="plain" onClick={() => generateAll() } disabled={isGenerating || pipelineRunning}>Повторить незавершённые</button><button className="plain" onClick={() => renderVideo()} disabled={isRendering || isGenerating || done !== scenes.length}>Пересобрать MP4</button></div><div className="workarea"><div className="sceneGrid">{scenes.map((scene) => <button key={scene.id} onClick={() => setSelectedId(scene.id)} className={`shot ${scene.id === selectedId ? "selected" : ""}`}><div className={`shotImage ${aspect === "9:16" ? "vertical" : ""}`}>{scene.image ? <img src={scene.image} alt={`Кадр ${scene.id}`} /> : <span>{scene.status === "working" ? "…" : String(scene.id).padStart(2,"0")}</span>}<i className={scene.status} /></div><small>{clock(scene.start)}–{clock(scene.end)}</small><p>{scene.text}</p>{scene.error && <em>{scene.error}</em>}</button>)}</div>{selected && <aside className="inspector"><div className={`preview ${aspect === "9:16" ? "vertical" : ""}`}>{selected.image ? <img src={selected.image} alt="Предпросмотр" /> : <div>Кадр {selected.id}</div>}{subtitles && <strong>{selected.text}</strong>}</div><label>Текст кадра<textarea value={selected.text} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, text: e.target.value } : item))} /></label><label>Промпт изображения<textarea className="prompt" value={selected.prompt} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, prompt: e.target.value, status: "ready" } : item))} /></label><button className="generate one" onClick={() => { const list = keyList(); if (!list.length) setShowKeys(true); else void generateScene(selected, list); }}>Повторить этот кадр</button></aside>}</div></div></details>}
+        {scenes.length > 0 && <details className="framesEditor"><summary>Исправить отдельные кадры ({done}/{scenes.length})</summary><div className="framesEditorBody"><div className="framesEditorActions"><span>Открывай это только если нужно заменить конкретную картинку.</span><button className="plain" onClick={() => generateAll() } disabled={isGenerating || pipelineRunning}>Повторить незавершённые</button><button className="plain" onClick={() => renderVideo()} disabled={isRendering || isGenerating || done !== scenes.length}>Пересобрать MP4</button></div><div className="workarea"><div className="sceneGrid">{scenes.map((scene) => <button key={scene.id} onClick={() => setSelectedId(scene.id)} className={`shot ${scene.id === selectedId ? "selected" : ""}`}><div className={`shotImage ${aspect === "9:16" ? "vertical" : ""}`}>{scene.image ? <img src={scene.image} alt={`Кадр ${scene.id}`} /> : <span>{scene.status === "working" ? "…" : String(scene.id).padStart(2,"0")}</span>}<i className={scene.status} /></div><small>{clock(scene.start)}–{clock(scene.end)}</small><p>{scene.text}</p>{scene.error && <em>{scene.error}</em>}</button>)}</div>{selected && <aside className="inspector"><div className={`preview ${aspect === "9:16" ? "vertical" : ""}`}>{selected.image ? <img src={selected.image} alt="Предпросмотр" /> : <div>Кадр {selected.id}</div>}</div><label>Текст кадра<textarea value={selected.text} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, text: e.target.value } : item))} /></label><label>Промпт изображения<textarea className="prompt" value={selected.prompt} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, prompt: e.target.value, status: "ready" } : item))} /></label><button className="generate one" onClick={() => { const list = keyList(); if (!list.length) setShowKeys(true); else void generateScene(selected, list); }}>Повторить этот кадр</button></aside>}</div></div></details>}
       </section>
 
       {showKeys && <div className="modal" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowKeys(false); }}><div className="modalBox"><button className="close" onClick={() => setShowKeys(false)}>×</button><h2>Ключи Google AI</h2><p>Они используются и для кадров, и для озвучки. Каждый следующий запрос берёт следующий ключ по кругу. Ключи хранятся только в этом браузере.</p><label className="csvImport"><input type="file" accept=".csv,text/csv" onChange={importKeys} /><span>Импортировать CSV с ключами</span><small>{keyList().length ? `Сейчас сохранено: ${keyList().length}` : "Подойдёт gemini_api_keys_50_2026-07-31.csv"}</small></label><textarea value={keys} onChange={(e) => setKeys(e.target.value)} placeholder={"AIza...\nAIza..."} /><button className="primary" onClick={saveKeys}>Сохранить</button></div></div>}
