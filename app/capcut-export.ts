@@ -173,7 +173,7 @@ export function buildCapCutDraft(
   const virtualMaterialIds: string[] = [];
   const visualTrack = jsonClone(sourceVideoTrack);
   visualTrack.id = uuid();
-  visualTrack.name = isLongForm ? "01 · КАДРЫ ±15°" : "01 · КАДРЫ БЕЗ НАКЛОНА";
+  visualTrack.name = isLongForm ? "01 · КАДРЫ ±7.5°" : "01 · КАДРЫ БЕЗ НАКЛОНА";
   visualTrack.is_default_name = false;
   visualTrack.segments = [];
 
@@ -218,7 +218,7 @@ export function buildCapCutDraft(
           right_control: { x: easeHandle, y: 0 },
           id: keyframeId(),
           time_offset: 0,
-          values: [15],
+          values: [7.5],
         },
         {
           curveType: "FreeCurveInOut",
@@ -227,7 +227,7 @@ export function buildCapCutDraft(
           right_control: { x: 0, y: 0 },
           id: keyframeId(),
           time_offset: clipDuration,
-          values: [-15],
+          values: [-7.5],
         },
       ],
     }] : [];
@@ -241,7 +241,7 @@ export function buildCapCutDraft(
       ...(segment.clip || {}),
       alpha: 1,
       rotation: 0,
-      scale: isLongForm ? { x: 1.43, y: 1.43 } : { x: 1, y: 1 },
+      scale: isLongForm ? { x: 1.23, y: 1.23 } : { x: 1, y: 1 },
     };
     visualTrack.segments.push(segment);
 

@@ -619,7 +619,7 @@ export default function Home() {
     setIsRendering(true);
     setRenderProgress(0);
     setMessage(aspect === "16:9"
-      ? "Собираю лонг MP4: плавное покачивание кадров от +15° до −15° и озвучка…"
+      ? "Собираю лонг MP4: плавное покачивание кадров от +7,5° до −7,5° и озвучка…"
       : "Собираю Shorts MP4 без наклона кадров, с озвучкой…");
     try {
       const width = aspect === "9:16" ? 720 : 1280;
@@ -671,11 +671,11 @@ export default function Home() {
       const drawCover = (image: HTMLImageElement, progress: number) => {
         const base = Math.max(width / image.naturalWidth, height / image.naturalHeight);
         const isLongForm = aspect === "16:9";
-        const scale = base * (isLongForm ? 1.43 : 1);
+        const scale = base * (isLongForm ? 1.23 : 1);
         const drawnWidth = image.naturalWidth * scale;
         const drawnHeight = image.naturalHeight * scale;
         const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
-        const rotation = isLongForm ? (15 - eased * 30) * Math.PI / 180 : 0;
+        const rotation = isLongForm ? (7.5 - eased * 15) * Math.PI / 180 : 0;
         context.save();
         context.translate(width / 2, height / 2);
         context.rotate(rotation);
@@ -898,7 +898,7 @@ export default function Home() {
             <label>Смена кадра<div className="staticControl">Каждые 7 секунд</div><small>{frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { setAspect(e.target.value); setScenes([]); }}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
-          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +15° → −15°" : "Shorts: кадры без наклона"}</strong><span>Без субтитров</span></div>
+          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +7,5° → −7,5°" : "Shorts: кадры без наклона"}</strong><span>Без субтитров</span></div>
           <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => setQuality(e.target.value)}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => setVoiceDirection(e.target.value)} /></label><div className="lockedStyle"><b>Стиль канала закреплён</b><small>Oil painting · chiaroscuro · red & teal · visible brushstrokes · film grain</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
           <div className={`pipelinePanel ${pipelineStage}`} aria-live="polite">
@@ -914,7 +914,7 @@ export default function Home() {
       </section>
 
       <section className="motionDemo card">
-        <div><p>ТЕСТ ДВИЖЕНИЯ ДЛЯ ЛОНГОВ</p><h2>Вот так кадры 16:9 будут качаться в CapCut</h2><span>Каждая фотография медленно идёт от +15° к −15°. В Shorts 9:16 наклон отключён.</span></div>
+        <div><p>ТЕСТ ДВИЖЕНИЯ ДЛЯ ЛОНГОВ</p><h2>Вот так кадры 16:9 будут качаться в CapCut</h2><span>Каждая фотография мягко идёт от +7,5° к −7,5°. В Shorts 9:16 наклон отключён.</span></div>
         <video src="/capcut-sway-demo.mp4" controls loop muted playsInline preload="metadata" />
       </section>
 
