@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from "mediabunny";
+import { addProjectToCapCut } from "./capcut-export";
 
 type Scene = {
   id: number;
@@ -244,8 +245,11 @@ export default function Home() {
   const [pipelineProgress, setPipelineProgress] = useState(0);
   const [pipelineLabel, setPipelineLabel] = useState("Готов к запуску");
   const [videoUrl, setVideoUrl] = useState("");
+  const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
   const [isRendering, setIsRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
+  const [isExportingCapCut, setIsExportingCapCut] = useState(false);
+  const [capCutMessage, setCapCutMessage] = useState("");
   const audioRef = useRef<HTMLAudioElement>(null);
   const voicePreviewRef = useRef<HTMLAudioElement>(null);
   const keyCursorRef = useRef(0);
@@ -788,7 +792,9 @@ export default function Home() {
       await output.finalize();
       if (!bufferTarget.buffer) throw new Error("Не удалось получить готовый MP4");
       if (videoUrl) URL.revokeObjectURL(videoUrl);
-      setVideoUrl(URL.createObjectURL(new Blob([bufferTarget.buffer], { type: "video/mp4" })));
+      const renderedVideo = new Blob([bufferTarget.buffer], { type: "video/mp4" });
+      setVideoBlob(renderedVideo);
+      setVideoUrl(URL.createObjectURL(renderedVideo));
       setRenderProgress(1);
       setMessage(`Готово: один MP4 ${aspect} собран${soundtrack ? " с озвучкой" : " без озвучки"}.`);
       return true;
@@ -798,6 +804,34 @@ export default function Home() {
       return false;
     } finally {
       setIsRendering(false);
+    }
+  }
+
+  async function exportToCapCut() {
+    if (!videoBlob || scenes.some((scene) => !scene.image)) {
+      setMessage("Снача дождись готового MP4 и всех кадров.");
+      return;
+    }
+    const shouldContinue = window.confirm("Перед добавлением закрой CapCut, чтобы он не перезаписал список проектов.\n\nЗатем выбери папку com.lveditor.draft.");
+    if (!shouldContinue) return;
+    setIsExportingCapCut(true);
+    setCapCutMessage("Подготавливаю проект…");
+    try {
+      const projectName = await addProjectToCapCut({
+        scenes,
+        readyVideo: videoBlob,
+        aspect,
+        duration: estimatedDuration,
+        subtitles,
+        onProgress: setCapCutMessage,
+      });
+      setCapCutMessage(`✓ Проект «${projectName}» добавлен. Открой CapCut.`);
+      setMessage(`Готово: в CapCut добавлен проект «${projectName}». Каждый кадр лежит отдельным клипом.`);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") setCapCutMessage("Добавление отменено.");
+      else setCapCutMessage(error instanceof Error ? `Не добавилось: ${error.message}` : "Не удалось добавить проект в CapCut.");
+    } finally {
+      setIsExportingCapCut(false);
     }
   }
 
@@ -972,7 +1006,7 @@ export default function Home() {
       <section className="storyboard card quickStoryboard">
         <div className="storyHead"><div><h2>Готовое видео</h2><p>{videoUrl ? `${clock(estimatedDuration)} · ${aspect} · озвучка и кадры в одном файле` : pipelineRunning ? pipelineLabel : "Здесь появится один собранный ролик"}</p></div>{videoUrl && <div className="storyActions">{subtitles && scenes.length > 0 && <button className="plain" onClick={exportSrt}>Скачать SRT</button>}<a className="downloadVideo downloadReady" href={videoUrl} download="cineframe-video.mp4">Скачать MP4</a></div>}</div>
         {message && <div className="notice">{message}</div>}
-        {videoUrl ? <div className={`finalVideoCard ${aspect === "9:16" ? "vertical" : ""}`}><video src={videoUrl} controls playsInline /><div><b>✓ Ролик собран целиком</b><span>Кадры, тайминг и озвучка уже внутри MP4.</span></div></div> : <div className="compactEmpty"><span>{pipelineRunning ? `${Math.round(pipelineProgress)}%` : "Видео пока нет"}</span><p>{pipelineRunning ? pipelineLabel : "Вставь текст и промпты сцен, затем нажми «Создать готовое видео»."}</p></div>}
+        {videoUrl ? <div className={`finalVideoCard ${aspect === "9:16" ? "vertical" : ""}`}><video src={videoUrl} controls playsInline /><div><b>✓ Ролик собран целиком</b><span>Кадры, тайминг и озвучка уже внутри MP4.</span><button className="capcutButton" onClick={exportToCapCut} disabled={isExportingCapCut}>{isExportingCapCut ? "ДОБАВЛЯЮ В CAPCUT…" : "ДОБАВИТЬ ПРОЕКТ В CAPCUT"}</button><small className="capcutHint">Каждая фотография будет отдельным клипом на таймлайне.</small>{capCutMessage && <em className={`capcutStatus ${capCutMessage.startsWith("Не ") ? "error" : ""}`}>{capCutMessage}</em>}</div></div> : <div className="compactEmpty"><span>{pipelineRunning ? `${Math.round(pipelineProgress)}%` : "Видео пока нет"}</span><p>{pipelineRunning ? pipelineLabel : "Вставь текст и промпты сцен, затем нажми «Создать готовое видео»."}</p></div>}
         {scenes.length > 0 && <details className="framesEditor"><summary>Исправить отдельные кадры ({done}/{scenes.length})</summary><div className="framesEditorBody"><div className="framesEditorActions"><span>Открывай это только если нужно заменить конкретную картинку.</span><button className="plain" onClick={() => generateAll() } disabled={isGenerating || pipelineRunning}>Повторить незавершённые</button><button className="plain" onClick={() => renderVideo()} disabled={isRendering || isGenerating || done !== scenes.length}>Пересобрать MP4</button></div><div className="workarea"><div className="sceneGrid">{scenes.map((scene) => <button key={scene.id} onClick={() => setSelectedId(scene.id)} className={`shot ${scene.id === selectedId ? "selected" : ""}`}><div className={`shotImage ${aspect === "9:16" ? "vertical" : ""}`}>{scene.image ? <img src={scene.image} alt={`Кадр ${scene.id}`} /> : <span>{scene.status === "working" ? "…" : String(scene.id).padStart(2,"0")}</span>}<i className={scene.status} /></div><small>{clock(scene.start)}–{clock(scene.end)}</small><p>{scene.text}</p>{scene.error && <em>{scene.error}</em>}</button>)}</div>{selected && <aside className="inspector"><div className={`preview ${aspect === "9:16" ? "vertical" : ""}`}>{selected.image ? <img src={selected.image} alt="Предпросмотр" /> : <div>Кадр {selected.id}</div>}{subtitles && <strong>{selected.text}</strong>}</div><label>Текст кадра<textarea value={selected.text} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, text: e.target.value } : item))} /></label><label>Промпт изображения<textarea className="prompt" value={selected.prompt} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, prompt: e.target.value, status: "ready" } : item))} /></label><button className="generate one" onClick={() => { const list = keyList(); if (!list.length) setShowKeys(true); else void generateScene(selected, list); }}>Повторить этот кадр</button></aside>}</div></div></details>}
       </section>
 
