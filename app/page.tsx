@@ -138,7 +138,7 @@ function frameCountForDuration(seconds: number) {
 
 function extractOpeningQuote(text: string) {
   const paragraphs = text.trim().split(/\n+/).map((part) => part.trim()).filter(Boolean);
-  if (!paragraphs[0]?.startsWith("«") || !paragraphs[0].includes("»") || !/Макиавелли/i.test(paragraphs[1] || "")) return null;
+  if (!paragraphs[0]?.startsWith("«") || !paragraphs[0].includes("»") || !paragraphs[1]) return null;
   return { quote: paragraphs[0], author: paragraphs[1], rest: paragraphs.slice(2).join("\n\n") };
 }
 
@@ -225,6 +225,7 @@ export default function Home() {
   const [audioUrl, setAudioUrl] = useState("");
   const [audioDuration, setAudioDuration] = useState(0);
   const [targetDuration, setTargetDuration] = useState(60);
+  const [durationMinutesInput, setDurationMinutesInput] = useState("1");
   const frameCount = frameCountForDuration(targetDuration);
   const [quality, setQuality] = useState("1K");
   const [aspect, setAspect] = useState("16:9");
@@ -281,6 +282,23 @@ export default function Home() {
     setAudioFile(file);
     setAudioUrl(url);
     setScenes([]);
+  }
+
+  function applyTargetDuration(seconds: number, inputValue?: string) {
+    const safeSeconds = Math.max(30, Math.round(seconds));
+    setTargetDuration(safeSeconds);
+    setDurationMinutesInput(inputValue ?? String(Number((safeSeconds / 60).toFixed(2))));
+    setAudioDuration(0);
+    setAudioFile(null);
+    setAudioUrl("");
+    setAudioName("");
+    setScenes([]);
+  }
+
+  function changeDurationMinutes(value: string) {
+    setDurationMinutesInput(value);
+    const minutes = Number(value.replace(",", "."));
+    if (Number.isFinite(minutes) && minutes >= 0.5) applyTargetDuration(minutes * 60, value);
   }
 
   function handleAudio(event: ChangeEvent<HTMLInputElement>) {
@@ -374,7 +392,7 @@ export default function Home() {
         setScript(voicePart);
         setDirection(scenesPart);
         const promptCount = scenesPart.split(/\r?\n/).filter((line) => /^\s*\d+\s*[.):—-]/.test(line)).length;
-        if (promptCount >= 250) setTargetDuration(1800);
+        if (promptCount >= 3) applyTargetDuration(promptCount * 7);
         setScenes([]);
         setMessage(`Загружен полный проект «${file.name}»: текст озвучки и ${promptCount} промптов сцен.`);
         return;
@@ -383,7 +401,7 @@ export default function Home() {
       const promptCount = content.split(/\r?\n/).filter((line) => /^\s*\d+\s*[.):—-]/.test(line)).length;
       if (promptCount >= 3) {
         setDirection(content);
-        if (promptCount >= 250) setTargetDuration(1800);
+        applyTargetDuration(promptCount * 7);
         setScenes([]);
         setMessage(`Загружен файл «${file.name}»: найдено ${promptCount} промптов сцен.`);
       } else {
@@ -619,7 +637,7 @@ export default function Home() {
     setIsRendering(true);
     setRenderProgress(0);
     setMessage(aspect === "16:9"
-      ? "Собираю лонг MP4: плавное покачивание кадров от +7,5° до −7,5° и озвучка…"
+      ? "Собираю лонг MP4: плавное покачивание кадров от +5° до −5° и озвучка…"
       : "Собираю Shorts MP4 без наклона кадров, с озвучкой…");
     try {
       const width = aspect === "9:16" ? 720 : 1280;
@@ -640,6 +658,9 @@ export default function Home() {
         image.onerror = () => reject(new Error(`Не загрузился кадр ${scene.id}`));
         image.src = scene.image!;
       })));
+      const openingQuote = aspect === "16:9"
+        ? extractOpeningQuote(script) || extractOpeningQuote(videoScenes[0]?.text || "")
+        : null;
 
       const bufferTarget = new BufferTarget();
       const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target: bufferTarget });
@@ -671,15 +692,79 @@ export default function Home() {
       const drawCover = (image: HTMLImageElement, progress: number) => {
         const base = Math.max(width / image.naturalWidth, height / image.naturalHeight);
         const isLongForm = aspect === "16:9";
-        const scale = base * (isLongForm ? 1.23 : 1);
+        const scale = base * (isLongForm ? 1.16 : 1);
         const drawnWidth = image.naturalWidth * scale;
         const drawnHeight = image.naturalHeight * scale;
         const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
-        const rotation = isLongForm ? (7.5 - eased * 15) * Math.PI / 180 : 0;
+        const rotation = isLongForm ? (5 - eased * 10) * Math.PI / 180 : 0;
         context.save();
         context.translate(width / 2, height / 2);
         context.rotate(rotation);
         context.drawImage(image, -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
+        context.restore();
+      };
+
+      const drawOpeningQuote = (timestamp: number) => {
+        if (!openingQuote) return;
+        const quoteDuration = Math.min(7, duration);
+        if (timestamp >= quoteDuration) return;
+        const smooth = (value: number) => {
+          const clamped = Math.max(0, Math.min(1, value));
+          return clamped * clamped * (3 - 2 * clamped);
+        };
+        const fadeIn = smooth(timestamp / 0.85);
+        const fadeOut = smooth((quoteDuration - timestamp) / 1.15);
+        const alpha = Math.min(fadeIn, fadeOut);
+        const entrance = smooth(timestamp / 1.2);
+        const maxTextWidth = width * 0.72;
+        const quoteText = openingQuote.quote.replace(/^«|»$/g, "").trim();
+        const fontSize = quoteText.length > 180 ? 29 : quoteText.length > 115 ? 34 : 40;
+
+        context.save();
+        context.globalAlpha = alpha;
+        const shade = context.createRadialGradient(width / 2, height / 2, width * 0.08, width / 2, height / 2, width * 0.62);
+        shade.addColorStop(0, "rgba(4, 7, 9, 0.52)");
+        shade.addColorStop(1, "rgba(3, 5, 7, 0.84)");
+        context.fillStyle = shade;
+        context.fillRect(0, 0, width, height);
+
+        context.translate(width / 2, height / 2 + (1 - entrance) * 18);
+        const quoteScale = 0.975 + entrance * 0.025;
+        context.scale(quoteScale, quoteScale);
+        context.strokeStyle = "rgba(218, 172, 92, 0.92)";
+        context.lineWidth = 2;
+        context.beginPath();
+        context.moveTo(-110 * entrance, -150);
+        context.lineTo(110 * entrance, -150);
+        context.stroke();
+
+        context.font = `italic ${fontSize}px Georgia, serif`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        const words = quoteText.split(/\s+/);
+        const lines: string[] = [];
+        let current = "";
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (current && context.measureText(candidate).width > maxTextWidth) {
+            lines.push(current);
+            current = word;
+          } else current = candidate;
+        }
+        if (current) lines.push(current);
+        const lineHeight = fontSize * 1.28;
+        const textTop = -(lines.length - 1) * lineHeight / 2 - 12;
+        context.shadowColor = "rgba(0, 0, 0, 0.8)";
+        context.shadowBlur = 14;
+        context.fillStyle = "#f4efe5";
+        lines.forEach((line, index) => {
+          const decorated = lines.length === 1 ? `«${line}»` : index === 0 ? `«${line}` : index === lines.length - 1 ? `${line}»` : line;
+          context.fillText(decorated, 0, textTop + index * lineHeight);
+        });
+        context.shadowBlur = 0;
+        context.font = "italic 22px Georgia, serif";
+        context.fillStyle = "#d7ad68";
+        context.fillText(openingQuote.author, 0, textTop + lines.length * lineHeight + 34);
         context.restore();
       };
 
@@ -692,6 +777,7 @@ export default function Home() {
         context.fillStyle = "#08090a";
         context.fillRect(0, 0, width, height);
         drawCover(images[sceneIndex], local);
+        drawOpeningQuote(timestamp);
         await videoSource.add(timestamp, frameDuration, { keyFrame: frame % (fps * 2) === 0 });
         if (frame % fps === 0 || frame === totalFrames - 1) {
           const progress = (frame + 1) / totalFrames;
@@ -733,6 +819,7 @@ export default function Home() {
         readyVideo: videoBlob,
         aspect,
         duration: estimatedDuration,
+        openingQuote: aspect === "16:9" ? extractOpeningQuote(script) : null,
         onProgress: setCapCutMessage,
       });
       setCapCutMessage(`✓ Проект «${projectName}» добавлен. Открой CapCut.`);
@@ -870,6 +957,7 @@ export default function Home() {
           <label className="textFileImport"><input type="file" accept=".txt,.md,text/plain,text/markdown" onChange={importTextFile} /><b>Загрузить файл с компьютера</b><span>TXT с озвучкой, промптами или готовым проектом</span></label>
           <textarea className="mainScript" value={script} onChange={(e) => { setScript(e.target.value); setScenes([]); }} placeholder="Вставь сюда полный текст ролика…" autoFocus />
           <div className="scriptMeta"><span>{wordCount} слов</span><span>План: {clock(estimatedDuration)}</span></div>
+          <div className="quoteHint">Заставка для лонга: первая строка — «Цитата», вторая — Автор. Цитата появится красиво и с анимацией; субтитров не будет.</div>
           <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { setDirection(e.target.value); setScenes([]); }} placeholder={"Напиши сцены отдельными строками:\n1. A thoughtful man standing in a vast library...\n2. The same man studying several documents...\n3. ..."} /><small>Каждая пронумерованная строка — отдельный кадр. Для выбранной длины нужно {frameCount} строк: новая сцена строго каждые 7 секунд. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
         </div>
 
@@ -894,11 +982,11 @@ export default function Home() {
         <div className="quickStep">
           <div className="quickTitle"><b>3</b><div><h2>Параметры видео</h2><p>Только три главные настройки.</p></div></div>
           <div className="bigControls">
-            <label>Длительность<select value={targetDuration} onChange={(e) => { setTargetDuration(Number(e.target.value)); setAudioDuration(0); setAudioFile(null); setAudioUrl(""); setAudioName(""); setScenes([]); }}><option value={30}>30 секунд</option><option value={60}>1 минута</option><option value={180}>3 минуты</option><option value={300}>5 минут</option><option value={600}>10 минут</option><option value={900}>15 минут</option><option value={1200}>20 минут</option><option value={1800}>30 минут</option></select><small>{audioDuration ? `Озвучка ${clock(audioDuration)} · видео ${clock(targetDuration)}` : "Это точная длина готового MP4"}</small></label>
+            <label>Длительность, минут<input type="text" inputMode="decimal" value={durationMinutesInput} onChange={(e) => changeDurationMinutes(e.target.value)} onBlur={() => { const minutes = Number(durationMinutesInput.replace(",", ".")); if (!Number.isFinite(minutes) || minutes < 0.5) applyTargetDuration(targetDuration); }} placeholder="Например, 45" /><small>{audioDuration ? `Озвучка ${clock(audioDuration)} · видео ${clock(targetDuration)}` : "Можно написать 45, 60, 90… без лимита"}</small></label>
             <label>Смена кадра<div className="staticControl">Каждые 7 секунд</div><small>{frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { setAspect(e.target.value); setScenes([]); }}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
-          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +7,5° → −7,5°" : "Shorts: кадры без наклона"}</strong><span>Без субтитров</span></div>
+          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +5° → −5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "Цитата в начале · без субтитров" : "Без субтитров"}</span></div>
           <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => setQuality(e.target.value)}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => setVoiceDirection(e.target.value)} /></label><div className="lockedStyle"><b>Стиль канала закреплён</b><small>Oil painting · chiaroscuro · red & teal · visible brushstrokes · film grain</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
           <div className={`pipelinePanel ${pipelineStage}`} aria-live="polite">
@@ -914,7 +1002,7 @@ export default function Home() {
       </section>
 
       <section className="motionDemo card">
-        <div><p>ТЕСТ ДВИЖЕНИЯ ДЛЯ ЛОНГОВ</p><h2>Вот так кадры 16:9 будут качаться в CapCut</h2><span>Каждая фотография мягко идёт от +7,5° к −7,5°. В Shorts 9:16 наклон отключён.</span></div>
+        <div><p>ТЕСТ ДВИЖЕНИЯ ДЛЯ ЛОНГОВ</p><h2>Вот так кадры 16:9 будут качаться в CapCut</h2><span>Каждая фотография мягко идёт от +5° к −5°. В Shorts 9:16 наклон отключён.</span></div>
         <video src="/capcut-sway-demo.mp4" controls loop muted playsInline preload="metadata" />
       </section>
 
