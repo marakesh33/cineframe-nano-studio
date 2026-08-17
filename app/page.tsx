@@ -3,6 +3,16 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from "mediabunny";
 import { addProjectToCapCut } from "./capcut-export";
+import {
+  clearGeneratedProjectMedia,
+  deleteProjectBlob,
+  loadProjectBlob,
+  loadProjectCheckpoint,
+  ProjectCheckpoint,
+  saveProjectBlob,
+  saveProjectCheckpoint,
+  saveSceneImage,
+} from "./project-storage";
 
 type Scene = {
   id: number;
@@ -136,6 +146,15 @@ function frameCountForDuration(seconds: number) {
   return Math.max(1, Math.ceil(seconds / 7));
 }
 
+function shortHash(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 function extractOpeningQuote(text: string) {
   const paragraphs = text.trim().split(/\n+/).map((part) => part.trim()).filter(Boolean);
   if (!paragraphs[0]?.startsWith("«") || !paragraphs[0].includes("»") || !paragraphs[1]) return null;
@@ -254,6 +273,9 @@ export default function Home() {
   const voicePreviewRef = useRef<HTMLAudioElement>(null);
   const keyCursorRef = useRef(0);
   const voiceChunkCacheRef = useRef(new Map<string, File>());
+  const checkpointIdRef = useRef(crypto.randomUUID());
+  const checkpointReadyRef = useRef(false);
+  const [checkpointStatus, setCheckpointStatus] = useState("Включаю автосохранение…");
   const [playhead, setPlayhead] = useState(0);
 
   useEffect(() => {
@@ -262,6 +284,94 @@ export default function Home() {
     keyCursorRef.current = Number.isFinite(savedCursor) && savedCursor >= 0 ? savedCursor : 0;
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const restored = await loadProjectCheckpoint();
+        if (cancelled || !restored) {
+          checkpointReadyRef.current = true;
+          if (!cancelled) setCheckpointStatus("Автосохранение включено");
+          return;
+        }
+        const { checkpoint, scenes: savedScenes, audioBlob: savedAudio, videoBlob: savedVideo } = restored;
+        checkpointIdRef.current = checkpoint.checkpointId;
+        setScript(checkpoint.script);
+        setDirection(checkpoint.direction);
+        setStyle(checkpoint.style || DEFAULT_STYLE);
+        setTargetDuration(checkpoint.targetDuration);
+        setDurationMinutesInput(checkpoint.durationMinutesInput);
+        setQuality(checkpoint.quality);
+        setAspect(checkpoint.aspect);
+        setVoice(checkpoint.voice);
+        setVoiceDirection(checkpoint.voiceDirection);
+        setScenes(savedScenes as Scene[]);
+        setSelectedId(savedScenes[0]?.id || null);
+        setAudioDuration(checkpoint.audioDuration);
+        if (savedAudio) {
+          const restoredAudio = new File([savedAudio], checkpoint.audioName || "cineframe-restored-voice.wav", { type: savedAudio.type || "audio/wav" });
+          setAudioFile(restoredAudio);
+          setAudioName(restoredAudio.name);
+          setAudioUrl(URL.createObjectURL(restoredAudio));
+        }
+        if (savedVideo) {
+          setVideoBlob(savedVideo);
+          setVideoUrl(URL.createObjectURL(savedVideo));
+        }
+        const restoredDone = savedScenes.filter((scene) => scene.status === "done").length;
+        if (savedVideo && checkpoint.pipelineStage === "done") {
+          setPipelineStage("done");
+          setPipelineProgress(100);
+          setPipelineLabel("Готовое видео восстановлено из автосохранения");
+        } else if (savedScenes.length) {
+          setPipelineStage(restoredDone === savedScenes.length && savedAudio ? "error" : "idle");
+          setPipelineProgress(20 + (restoredDone / savedScenes.length) * 58);
+          setPipelineLabel(`Восстановлено кадров: ${restoredDone} из ${savedScenes.length}. Можно продолжить.`);
+        } else {
+          setPipelineStage("idle");
+          setPipelineProgress(Math.min(checkpoint.pipelineProgress, savedAudio ? 20 : 18));
+          setPipelineLabel(savedAudio ? "Озвучка восстановлена. Можно продолжить создание видео." : "Проект восстановлен. Можно продолжить.");
+        }
+        setCheckpointStatus(`Восстановлено: ${restoredDone} из ${savedScenes.length || frameCountForDuration(checkpoint.targetDuration)} кадров`);
+      } catch (error) {
+        if (!cancelled) setCheckpointStatus(error instanceof Error ? `Автосохранение недоступно: ${error.message}` : "Автосохранение недоступно");
+      } finally {
+        checkpointReadyRef.current = true;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!checkpointReadyRef.current) return;
+    const timeout = window.setTimeout(() => {
+      const checkpoint: ProjectCheckpoint = {
+        version: 1,
+        checkpointId: checkpointIdRef.current,
+        savedAt: Date.now(),
+        script,
+        direction,
+        style,
+        targetDuration,
+        durationMinutesInput,
+        quality,
+        aspect,
+        voice,
+        voiceDirection,
+        audioName,
+        audioDuration,
+        scenes: scenes.map(({ image: _image, ...scene }) => scene),
+        pipelineStage,
+        pipelineProgress,
+        pipelineLabel,
+      };
+      void saveProjectCheckpoint(checkpoint)
+        .then(() => setCheckpointStatus(`Сохранено автоматически · ${new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`))
+        .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `Не сохранилось: ${error.message}` : "Не удалось сохранить проект"));
+    }, 300);
+    return () => window.clearTimeout(timeout);
+  }, [script, direction, style, targetDuration, durationMinutesInput, quality, aspect, voice, voiceDirection, audioName, audioDuration, scenes, pipelineStage, pipelineProgress, pipelineLabel]);
+
   const wordCount = useMemo(() => script.trim().split(/\s+/).filter(Boolean).length, [script]);
   const estimatedDuration = Math.max(1, targetDuration);
   const expectedScenes = frameCount;
@@ -269,7 +379,29 @@ export default function Home() {
   const currentScene = scenes.find((scene) => playhead >= scene.start && playhead < scene.end) || selected || scenes[0];
   const done = scenes.filter((scene) => scene.status === "done").length;
 
-  function attachAudio(file: File) {
+  async function invalidateGeneratedProject() {
+    if (!scenes.length && !audioFile && !videoBlob) return;
+    checkpointIdRef.current = crypto.randomUUID();
+    await clearGeneratedProjectMedia().catch((error: unknown) => {
+      setCheckpointStatus(error instanceof Error ? `Не удалось очистить старый проект: ${error.message}` : "Не удалось очистить старый проект");
+    });
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setAudioDuration(0);
+    setAudioFile(null);
+    setAudioUrl("");
+    setAudioName("");
+    setScenes([]);
+    setSelectedId(null);
+    setVideoBlob(null);
+    setVideoUrl("");
+    setPipelineStage("idle");
+    setPipelineProgress(0);
+    setPipelineLabel("Проект изменён. Можно запускать создание.");
+  }
+
+  async function attachAudio(file: File, options: { preserveScenes?: boolean } = {}) {
+    if (!options.preserveScenes) await invalidateGeneratedProject();
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     const url = URL.createObjectURL(file);
     const probe = new Audio(url);
@@ -281,18 +413,16 @@ export default function Home() {
     setAudioName(file.name);
     setAudioFile(file);
     setAudioUrl(url);
-    setScenes([]);
+    await saveProjectBlob("audio", file).then(() => setCheckpointStatus("Озвучка сохранена автоматически")).catch((error: unknown) => {
+      setCheckpointStatus(error instanceof Error ? `Озвучка не сохранилась: ${error.message}` : "Озвучка не сохранилась");
+    });
   }
 
   function applyTargetDuration(seconds: number, inputValue?: string) {
+    void invalidateGeneratedProject();
     const safeSeconds = Math.max(30, Math.round(seconds));
     setTargetDuration(safeSeconds);
     setDurationMinutesInput(inputValue ?? String(Number((safeSeconds / 60).toFixed(2))));
-    setAudioDuration(0);
-    setAudioFile(null);
-    setAudioUrl("");
-    setAudioName("");
-    setScenes([]);
   }
 
   function changeDurationMinutes(value: string) {
@@ -303,7 +433,7 @@ export default function Home() {
 
   function handleAudio(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (file) attachAudio(file);
+    if (file) void attachAudio(file);
   }
 
   function measureAudio(file: File) {
@@ -382,6 +512,7 @@ export default function Home() {
         setMessage("Выбранный файл пуст.");
         return;
       }
+      void invalidateGeneratedProject();
 
       const voiceMarker = "=== ТЕКСТ ДЛЯ ОЗВУЧКИ ===";
       const scenesMarker = "=== ПРОМПТЫ СЦЕН И ВИДЕО ===";
@@ -500,8 +631,16 @@ export default function Home() {
     for (let index = 0; index < chunks.length; index++) {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const chunkSeconds = Math.max(8, desiredSeconds * (chunkWords / Math.max(1, totalWords)));
-      const cacheKey = `${voice}:${Math.round(desiredSeconds)}:${index}:${chunks[index]}`;
-      const cached = voiceChunkCacheRef.current.get(cacheKey);
+      const cacheKey = `${voice}:${Math.round(desiredSeconds)}:${index}:${voiceDirection}:${chunks[index]}`;
+      const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
+      let cached = voiceChunkCacheRef.current.get(cacheKey);
+      if (!cached) {
+        const savedChunk = await loadProjectBlob(storedKey).catch(() => null);
+        if (savedChunk) {
+          cached = new File([savedChunk], `gemini-${voice.toLowerCase()}-${index + 1}.wav`, { type: savedChunk.type || "audio/wav" });
+          voiceChunkCacheRef.current.set(cacheKey, cached);
+        }
+      }
       if (cached) {
         files.push(cached);
         onProgress?.(index + 1, chunks.length);
@@ -517,6 +656,9 @@ export default function Home() {
       if (partDuration < chunkSeconds * 0.45) throw new Error(`Gemini не дочитала часть ${index + 1}. Нажми «Продолжить озвучку» — готовые части сохранятся.`);
       part = await padVoicePart(part, chunkSeconds);
       voiceChunkCacheRef.current.set(cacheKey, part);
+      await saveProjectBlob(storedKey, part)
+        .then(() => setCheckpointStatus(`Автосохранение озвучки: часть ${index + 1} из ${chunks.length}`))
+        .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `Часть озвучки не сохранилась: ${error.message}` : "Часть озвучки не сохранилась"));
       files.push(part);
       onProgress?.(index + 1, chunks.length);
     }
@@ -535,7 +677,7 @@ export default function Home() {
     const voicePartCount = splitVoiceText(voiceTextForScript(script)).length;
     setMessage(`Gemini создаёт озвучку частями: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
-      attachAudio(await requestLongVoiceTrack(list, voiceTextForScript(script), targetDuration, (completed, total) => setMessage(`Создаю озвучку: часть ${completed} из ${total}…`)));
+      await attachAudio(await requestLongVoiceTrack(list, voiceTextForScript(script), targetDuration, (completed, total) => setMessage(`Создаю озвучку: часть ${completed} из ${total}…`)), { preserveScenes: true });
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Озвучка не создалась";
       setVoiceError(reason);
@@ -569,6 +711,7 @@ export default function Home() {
   }
 
   async function generateScene(scene: Scene, list: string[]): Promise<Scene> {
+    const checkpointId = checkpointIdRef.current;
     setScenes((items) => items.map((item) => item.id === scene.id ? { ...item, status: "working", error: undefined } : item));
     try {
       const referenceImages = await loadStyleReferences();
@@ -580,6 +723,11 @@ export default function Home() {
       const result = await response.json() as { image?: string; error?: string };
       if (!response.ok || !result.image) throw new Error(result.error || `Google API: ${response.status}`);
       const completed: Scene = { ...scene, image: result.image, status: "done", error: undefined };
+      await saveSceneImage(checkpointId, scene.id, result.image).then(() => {
+        setCheckpointStatus(`Кадр ${scene.id} сохранён автоматически`);
+      }).catch((error: unknown) => {
+        setCheckpointStatus(error instanceof Error ? `Кадр ${scene.id} не сохранился: ${error.message}` : `Кадр ${scene.id} не сохранился`);
+      });
       setScenes((items) => items.map((item) => item.id === scene.id ? completed : item));
       return completed;
     } catch (error) {
@@ -790,6 +938,9 @@ export default function Home() {
       if (!bufferTarget.buffer) throw new Error("Не удалось получить готовый MP4");
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       const renderedVideo = new Blob([bufferTarget.buffer], { type: "video/mp4" });
+      await saveProjectBlob("video", renderedVideo)
+        .then(() => setCheckpointStatus("Готовый MP4 сохранён автоматически"))
+        .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `MP4 не сохранился: ${error.message}` : "MP4 не сохранился"));
       setVideoBlob(renderedVideo);
       setVideoUrl(URL.createObjectURL(renderedVideo));
       setRenderProgress(1);
@@ -836,7 +987,10 @@ export default function Home() {
     const list = keyList();
     if (!script.trim()) { setMessage("Вставь текст для озвучки."); return; }
     if (!list.length) { setShowKeys(true); return; }
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
     setVideoUrl("");
+    setVideoBlob(null);
+    void deleteProjectBlob("video");
     setPipelineProgress(2);
     setPipelineStage("voice");
     setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceTextForScript(script)).length} частей…`);
@@ -855,13 +1009,16 @@ export default function Home() {
           soundtrack = await requestVoiceTrack(list, script, targetDuration, duration);
           duration = await measureAudio(soundtrack);
         }
-        attachAudio(soundtrack);
+        await attachAudio(soundtrack, { preserveScenes: true });
       }
       duration = targetDuration;
       setPipelineProgress(20);
       setPipelineStage("frames");
       setPipelineLabel(`Создаю ${frameCount} кадров в закреплённом стиле канала…`);
-      const plan = splitIntoScenes(script, frameCount, duration, style, direction, aspect);
+      const reusablePlan = scenes.length === frameCount
+        && Math.abs((scenes.at(-1)?.end || 0) - duration) < 1
+        && scenes.every((scene, index) => scene.id === index + 1);
+      const plan = reusablePlan ? scenes : splitIntoScenes(script, frameCount, duration, style, direction, aspect);
       setScenes(plan);
       setSelectedId(plan[0]?.id || null);
       let generated = await generateAll(plan, list, (completed, total) => {
@@ -936,6 +1093,7 @@ export default function Home() {
   }
 
   const pipelineRunning = pipelineStage === "voice" || pipelineStage === "frames" || pipelineStage === "render";
+  const projectLocked = pipelineRunning || isGenerating || isGeneratingVoice || isRendering;
   const pipelineIndex = pipelineStage === "voice" ? 0 : pipelineStage === "frames" ? 1 : pipelineStage === "render" ? 2 : pipelineStage === "done" ? 3 : -1;
 
   return (
@@ -954,11 +1112,11 @@ export default function Home() {
       <section className="quickStudio card">
         <div className="quickStep scriptStep">
           <div className="quickTitle"><b>1</b><div><h2>Текст для озвучки</h2><p>Вставляй сюда именно тот текст, который должен произнести голос.</p></div></div>
-          <label className="textFileImport"><input type="file" accept=".txt,.md,text/plain,text/markdown" onChange={importTextFile} /><b>Загрузить файл с компьютера</b><span>TXT с озвучкой, промптами или готовым проектом</span></label>
-          <textarea className="mainScript" value={script} onChange={(e) => { setScript(e.target.value); setScenes([]); }} placeholder="Вставь сюда полный текст ролика…" autoFocus />
+          <label className="textFileImport"><input type="file" accept=".txt,.md,text/plain,text/markdown" onChange={importTextFile} disabled={projectLocked} /><b>Загрузить файл с компьютера</b><span>TXT с озвучкой, промптами или готовым проектом</span></label>
+          <textarea className="mainScript" value={script} onChange={(e) => { void invalidateGeneratedProject(); setScript(e.target.value); }} placeholder="Вставь сюда полный текст ролика…" autoFocus disabled={projectLocked} />
           <div className="scriptMeta"><span>{wordCount} слов</span><span>План: {clock(estimatedDuration)}</span></div>
           <div className="quoteHint">Заставка для лонга: первая строка — «Цитата», вторая — Автор. Цитата появится красиво и с анимацией; субтитров не будет.</div>
-          <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { setDirection(e.target.value); setScenes([]); }} placeholder={"Напиши сцены отдельными строками:\n1. A thoughtful man standing in a vast library...\n2. The same man studying several documents...\n3. ..."} /><small>Каждая пронумерованная строка — отдельный кадр. Для выбранной длины нужно {frameCount} строк: новая сцена строго каждые 7 секунд. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
+          <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { void invalidateGeneratedProject(); setDirection(e.target.value); }} placeholder={"Напиши сцены отдельными строками:\n1. A thoughtful man standing in a vast library...\n2. The same man studying several documents...\n3. ..."} disabled={projectLocked} /><small>Каждая пронумерованная строка — отдельный кадр. Для выбранной длины нужно {frameCount} строк: новая сцена строго каждые 7 секунд. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
         </div>
 
         <div className="quickDivider" />
@@ -966,7 +1124,7 @@ export default function Home() {
         <div className="quickStep">
           <div className="quickTitle"><b>2</b><div><h2>Озвучка</h2><p>Выбери голос и нажми большую кнопку. Он прочитает текст сверху.</p></div></div>
           <div className="simpleVoiceRow">
-            <label>Голос<select value={voice} onChange={(e) => setVoice(e.target.value)}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+            <label>Голос<select value={voice} onChange={(e) => { void invalidateGeneratedProject(); setVoice(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
             <button className="previewButton" onClick={previewVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoicePreview ? "Создаю пример…" : "▶ Пример голоса"}</button>
             <button className="createVoiceButton" onClick={generateVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoice ? "Озвучиваю текст…" : "Создать озвучку текста"}</button>
           </div>
@@ -974,7 +1132,7 @@ export default function Home() {
             {isGeneratingVoicePreview ? <><b><i /> Создаю короткий пример…</b><small>Плеер появится здесь.</small></> : isGeneratingVoice ? <><b><i /> Озвучиваю весь текст сверху…</b><small>Не закрывай страницу.</small></> : voiceError ? <><b>Озвучка остановилась</b><small>{voiceError}</small>{voiceError.includes("current location") && <em>Включи VPN с поддерживаемой страной.</em>}{voiceError.includes("403") && <em>Переключи VPN на другой сервер и попробуй снова.</em>}<button className="retryVoiceInline" onClick={generateVoice}>Продолжить озвучку</button></> : voicePreviewUrl ? <><b>✓ Пример {voice}</b><audio className="voicePreview" ref={voicePreviewRef} src={voicePreviewUrl} controls /></> : <><b>Пример появится здесь</b><small>Кнопка «Пример голоса» читает короткую тестовую фразу.</small></>}
           </div>
           {audioUrl && <div className="mainAudio"><div><b>✓ Озвучка ролика готова</b><small>{clock(audioDuration)} · {audioName}</small><a href={audioUrl} download="cineframe-full-voice.wav">Скачать полную WAV</a></div><audio ref={audioRef} src={audioUrl} controls onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)} /></div>}
-          <label className={`compactUpload ${audioName ? "filled" : ""}`}><input type="file" accept="audio/*" onChange={handleAudio} /><span>Или загрузить свою MP3 / WAV</span></label>
+          <label className={`compactUpload ${audioName ? "filled" : ""}`}><input type="file" accept="audio/*" onChange={handleAudio} disabled={projectLocked} /><span>Или загрузить свою MP3 / WAV</span></label>
         </div>
 
         <div className="quickDivider" />
@@ -982,13 +1140,14 @@ export default function Home() {
         <div className="quickStep">
           <div className="quickTitle"><b>3</b><div><h2>Параметры видео</h2><p>Только три главные настройки.</p></div></div>
           <div className="bigControls">
-            <label>Длительность, минут<input type="text" inputMode="decimal" value={durationMinutesInput} onChange={(e) => changeDurationMinutes(e.target.value)} onBlur={() => { const minutes = Number(durationMinutesInput.replace(",", ".")); if (!Number.isFinite(minutes) || minutes < 0.5) applyTargetDuration(targetDuration); }} placeholder="Например, 45" /><small>{audioDuration ? `Озвучка ${clock(audioDuration)} · видео ${clock(targetDuration)}` : "Можно написать 45, 60, 90… без лимита"}</small></label>
+            <label>Длительность, минут<input type="text" inputMode="decimal" value={durationMinutesInput} onChange={(e) => changeDurationMinutes(e.target.value)} onBlur={() => { const minutes = Number(durationMinutesInput.replace(",", ".")); if (!Number.isFinite(minutes) || minutes < 0.5) applyTargetDuration(targetDuration); }} placeholder="Например, 45" disabled={projectLocked} /><small>{audioDuration ? `Озвучка ${clock(audioDuration)} · видео ${clock(targetDuration)}` : "Можно написать 45, 60, 90… без лимита"}</small></label>
             <label>Смена кадра<div className="staticControl">Каждые 7 секунд</div><small>{frameCount} сцен на {clock(targetDuration)}</small></label>
-            <label>Формат<select value={aspect} onChange={(e) => { setAspect(e.target.value); setScenes([]); }}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
+            <label>Формат<select value={aspect} onChange={(e) => { void invalidateGeneratedProject(); setAspect(e.target.value); }} disabled={projectLocked}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
           <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +5° → −5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "Цитата в начале · без субтитров" : "Без субтитров"}</span></div>
-          <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => setQuality(e.target.value)}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => setVoiceDirection(e.target.value)} /></label><div className="lockedStyle"><b>Стиль канала закреплён</b><small>Oil painting · chiaroscuro · red & teal · visible brushstrokes · film grain</small></div></details>
-          <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
+          <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Стиль канала закреплён</b><small>Oil painting · chiaroscuro · red & teal · visible brushstrokes · film grain</small></div></details>
+          <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : scenes.length || audioFile ? "ПРОДОЛЖИТЬ СОХРАНЁННЫЙ ПРОЕКТ" : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
+          <div className="autosaveStatus"><i /> <span>{checkpointStatus}</span><small>Кадры, озвучка, прогресс и MP4 сохраняются в этом браузере.</small></div>
           <div className={`pipelinePanel ${pipelineStage}`} aria-live="polite">
             <div className="pipelineSteps">
               {["Озвучка", "Кадры", "Сборка MP4", "Готово"].map((label, index) => <div key={label} className={`pipelineStep ${pipelineStage === "error" ? "" : index < pipelineIndex || pipelineStage === "done" ? "done" : index === pipelineIndex ? "active" : ""}`}><i>{index < pipelineIndex || pipelineStage === "done" ? "✓" : index + 1}</i><span>{label}</span></div>)}
