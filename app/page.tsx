@@ -43,6 +43,7 @@ const VOICES = [
 
 const DEFAULT_VOICE_DIRECTION = `Native Russian male narrator, 40–55 years old. Deep, warm, mature baritone; calm authority, intelligent and emotionally restrained. Natural conversational Russian, clear diction, medium pace, meaningful pauses after important ideas. Avoid a high pitch, advertising enthusiasm, theatrical acting, whispering, singing and robotic rhythm. Read the supplied script verbatim without adding or removing words.`;
 const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
+const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
 
 type StyleReference = { data: string; mime_type: string };
 let styleReferencePromise: Promise<StyleReference[]> | null = null;
@@ -161,9 +162,11 @@ function extractOpeningQuote(text: string) {
   return { quote: paragraphs[0], author: paragraphs[1], rest: paragraphs.slice(2).join("\n\n") };
 }
 
-function voiceTextForScript(text: string) {
+function voiceTextForScript(text: string, includeShortsOutro = false) {
   const opening = extractOpeningQuote(text);
-  return opening ? `${opening.quote}\n\n${opening.rest}` : text;
+  const voiceText = opening ? `${opening.quote}\n\n${opening.rest}` : text;
+  if (!includeShortsOutro || voiceText.includes(SHORTS_OUTRO)) return voiceText;
+  return `${voiceText.trim()}\n\n${SHORTS_OUTRO}`;
 }
 
 function splitVoiceText(text: string, maxChars = 350) {
@@ -674,10 +677,11 @@ export default function Home() {
     if (!script.trim()) { setMessage("Снача вставь сценарий — именно его сайт озвучит."); return; }
     setIsGeneratingVoice(true);
     setVoiceError("");
-    const voicePartCount = splitVoiceText(voiceTextForScript(script)).length;
+    const voiceScript = voiceTextForScript(script, aspect === "9:16");
+    const voicePartCount = splitVoiceText(voiceScript).length;
     setMessage(`Gemini создаёт озвучку частями: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
-      await attachAudio(await requestLongVoiceTrack(list, voiceTextForScript(script), targetDuration, (completed, total) => setMessage(`Создаю озвучку: часть ${completed} из ${total}…`)), { preserveScenes: true });
+      await attachAudio(await requestLongVoiceTrack(list, voiceScript, targetDuration, (completed, total) => setMessage(`Создаю озвучку: часть ${completed} из ${total}…`)), { preserveScenes: true });
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Озвучка не создалась";
       setVoiceError(reason);
@@ -993,20 +997,21 @@ export default function Home() {
     void deleteProjectBlob("video");
     setPipelineProgress(2);
     setPipelineStage("voice");
-    setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceTextForScript(script)).length} частей…`);
+    const voiceScript = voiceTextForScript(script, aspect === "9:16");
+    setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceScript).length} частей…`);
     setVoiceError("");
     try {
       let soundtrack = audioFile;
       let duration = audioDuration;
       if (!soundtrack) {
-        soundtrack = await requestLongVoiceTrack(list, voiceTextForScript(script), targetDuration, (completed, total) => {
+        soundtrack = await requestLongVoiceTrack(list, voiceScript, targetDuration, (completed, total) => {
           setPipelineProgress(2 + (completed / total) * 16);
           setPipelineLabel(`Создаю озвучку: часть ${completed} из ${total}`);
         });
         duration = await measureAudio(soundtrack);
-        if (splitVoiceText(script).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
+        if (splitVoiceText(voiceScript).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
           setPipelineLabel(`Корректирую темп озвучки: было ${clock(duration)}, нужно ${clock(targetDuration)}…`);
-          soundtrack = await requestVoiceTrack(list, script, targetDuration, duration);
+          soundtrack = await requestVoiceTrack(list, voiceScript, targetDuration, duration);
           duration = await measureAudio(soundtrack);
         }
         await attachAudio(soundtrack, { preserveScenes: true });
@@ -1144,7 +1149,7 @@ export default function Home() {
             <label>Смена кадра<div className="staticControl">Каждые 7 секунд</div><small>{frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { void invalidateGeneratedProject(); setAspect(e.target.value); }} disabled={projectLocked}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
-          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +5° → −5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "Цитата в начале · без субтитров" : "Без субтитров"}</span></div>
+          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +5° → −5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "Цитата в начале · без субтитров" : "Фирменная фраза в конце · без субтитров"}</span></div>
           <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Стиль канала закреплён</b><small>Oil painting · chiaroscuro · red & teal · visible brushstrokes · film grain</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : scenes.length || audioFile ? "ПРОДОЛЖИТЬ СОХРАНЁННЫЙ ПРОЕКТ" : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
           <div className="autosaveStatus"><i /> <span>{checkpointStatus}</span><small>Кадры, озвучка, прогресс и MP4 сохраняются в этом браузере.</small></div>
