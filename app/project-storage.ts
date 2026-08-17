@@ -27,6 +27,8 @@ export type ProjectCheckpoint = {
   voiceDirection: string;
   audioName: string;
   audioDuration: number;
+  audioSource?: "generated" | "uploaded";
+  audioIncludesShortsOutro?: boolean;
   scenes: SavedScene[];
   pipelineStage: "idle" | "voice" | "frames" | "render" | "done" | "error";
   pipelineProgress: number;

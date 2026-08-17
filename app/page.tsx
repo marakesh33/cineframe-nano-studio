@@ -246,6 +246,8 @@ export default function Home() {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState("");
   const [audioDuration, setAudioDuration] = useState(0);
+  const [audioSource, setAudioSource] = useState<"generated" | "uploaded">("uploaded");
+  const [audioIncludesShortsOutro, setAudioIncludesShortsOutro] = useState(false);
   const [targetDuration, setTargetDuration] = useState(60);
   const [durationMinutesInput, setDurationMinutesInput] = useState("1");
   const frameCount = frameCountForDuration(targetDuration);
@@ -311,6 +313,8 @@ export default function Home() {
         setScenes(savedScenes as Scene[]);
         setSelectedId(savedScenes[0]?.id || null);
         setAudioDuration(checkpoint.audioDuration);
+        setAudioSource(checkpoint.audioSource || (checkpoint.audioName.startsWith("gemini-") ? "generated" : "uploaded"));
+        setAudioIncludesShortsOutro(checkpoint.audioIncludesShortsOutro ?? false);
         if (savedAudio) {
           const restoredAudio = new File([savedAudio], checkpoint.audioName || "cineframe-restored-voice.wav", { type: savedAudio.type || "audio/wav" });
           setAudioFile(restoredAudio);
@@ -363,6 +367,8 @@ export default function Home() {
         voiceDirection,
         audioName,
         audioDuration,
+        audioSource,
+        audioIncludesShortsOutro,
         scenes: scenes.map(({ image: _image, ...scene }) => scene),
         pipelineStage,
         pipelineProgress,
@@ -373,7 +379,7 @@ export default function Home() {
         .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `Не сохранилось: ${error.message}` : "Не удалось сохранить проект"));
     }, 300);
     return () => window.clearTimeout(timeout);
-  }, [script, direction, style, targetDuration, durationMinutesInput, quality, aspect, voice, voiceDirection, audioName, audioDuration, scenes, pipelineStage, pipelineProgress, pipelineLabel]);
+  }, [script, direction, style, targetDuration, durationMinutesInput, quality, aspect, voice, voiceDirection, audioName, audioDuration, audioSource, audioIncludesShortsOutro, scenes, pipelineStage, pipelineProgress, pipelineLabel]);
 
   const wordCount = useMemo(() => script.trim().split(/\s+/).filter(Boolean).length, [script]);
   const estimatedDuration = Math.max(1, targetDuration);
@@ -394,6 +400,8 @@ export default function Home() {
     setAudioFile(null);
     setAudioUrl("");
     setAudioName("");
+    setAudioSource("uploaded");
+    setAudioIncludesShortsOutro(false);
     setScenes([]);
     setSelectedId(null);
     setVideoBlob(null);
@@ -403,7 +411,7 @@ export default function Home() {
     setPipelineLabel("Проект изменён. Можно запускать создание.");
   }
 
-  async function attachAudio(file: File, options: { preserveScenes?: boolean } = {}) {
+  async function attachAudio(file: File, options: { preserveScenes?: boolean; source?: "generated" | "uploaded"; includesShortsOutro?: boolean } = {}) {
     if (!options.preserveScenes) await invalidateGeneratedProject();
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     const url = URL.createObjectURL(file);
@@ -416,6 +424,8 @@ export default function Home() {
     setAudioName(file.name);
     setAudioFile(file);
     setAudioUrl(url);
+    setAudioSource(options.source || "uploaded");
+    setAudioIncludesShortsOutro(Boolean(options.includesShortsOutro));
     await saveProjectBlob("audio", file).then(() => setCheckpointStatus("Озвучка сохранена автоматически")).catch((error: unknown) => {
       setCheckpointStatus(error instanceof Error ? `Озвучка не сохранилась: ${error.message}` : "Озвучка не сохранилась");
     });
@@ -681,7 +691,7 @@ export default function Home() {
     const voicePartCount = splitVoiceText(voiceScript).length;
     setMessage(`Gemini создаёт озвучку частями: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
-      await attachAudio(await requestLongVoiceTrack(list, voiceScript, targetDuration, (completed, total) => setMessage(`Создаю озвучку: часть ${completed} из ${total}…`)), { preserveScenes: true });
+      await attachAudio(await requestLongVoiceTrack(list, voiceScript, targetDuration, (completed, total) => setMessage(`Создаю озвучку: часть ${completed} из ${total}…`)), { preserveScenes: true, source: "generated", includesShortsOutro: aspect === "9:16" });
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Озвучка не создалась";
       setVoiceError(reason);
@@ -1001,8 +1011,13 @@ export default function Home() {
     setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceScript).length} частей…`);
     setVoiceError("");
     try {
-      let soundtrack = audioFile;
+      const savedVoiceIsOutdated = aspect === "9:16" && audioFile && audioSource === "generated" && !audioIncludesShortsOutro;
+      let soundtrack = savedVoiceIsOutdated ? null : audioFile;
       let duration = audioDuration;
+      if (savedVoiceIsOutdated) {
+        setPipelineLabel("Обновляю старую озвучку и добавляю переход на основной канал…");
+        setMessage("Старая озвучка была создана без фирменной фразы. Пересоздаю её автоматически.");
+      }
       if (!soundtrack) {
         soundtrack = await requestLongVoiceTrack(list, voiceScript, targetDuration, (completed, total) => {
           setPipelineProgress(2 + (completed / total) * 16);
@@ -1014,7 +1029,7 @@ export default function Home() {
           soundtrack = await requestVoiceTrack(list, voiceScript, targetDuration, duration);
           duration = await measureAudio(soundtrack);
         }
-        await attachAudio(soundtrack, { preserveScenes: true });
+        await attachAudio(soundtrack, { preserveScenes: true, source: "generated", includesShortsOutro: aspect === "9:16" });
       }
       duration = targetDuration;
       setPipelineProgress(20);
@@ -1136,7 +1151,7 @@ export default function Home() {
           <div className={`voiceResult ${isGeneratingVoicePreview || isGeneratingVoice ? "working" : voiceError ? "error" : voicePreviewUrl ? "ready" : ""}`}>
             {isGeneratingVoicePreview ? <><b><i /> Создаю короткий пример…</b><small>Плеер появится здесь.</small></> : isGeneratingVoice ? <><b><i /> Озвучиваю весь текст сверху…</b><small>Не закрывай страницу.</small></> : voiceError ? <><b>Озвучка остановилась</b><small>{voiceError}</small>{voiceError.includes("current location") && <em>Включи VPN с поддерживаемой страной.</em>}{voiceError.includes("403") && <em>Переключи VPN на другой сервер и попробуй снова.</em>}<button className="retryVoiceInline" onClick={generateVoice}>Продолжить озвучку</button></> : voicePreviewUrl ? <><b>✓ Пример {voice}</b><audio className="voicePreview" ref={voicePreviewRef} src={voicePreviewUrl} controls /></> : <><b>Пример появится здесь</b><small>Кнопка «Пример голоса» читает короткую тестовую фразу.</small></>}
           </div>
-          {audioUrl && <div className="mainAudio"><div><b>✓ Озвучка ролика готова</b><small>{clock(audioDuration)} · {audioName}</small><a href={audioUrl} download="cineframe-full-voice.wav">Скачать полную WAV</a></div><audio ref={audioRef} src={audioUrl} controls onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)} /></div>}
+          {audioUrl && <div className="mainAudio"><div><b>✓ Озвучка ролика готова</b><small>{clock(audioDuration)} · {audioName}{audioIncludesShortsOutro ? " · переход на основной канал добавлен" : ""}</small><a href={audioUrl} download="cineframe-full-voice.wav">Скачать полную WAV</a></div><audio ref={audioRef} src={audioUrl} controls onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)} /></div>}
           <label className={`compactUpload ${audioName ? "filled" : ""}`}><input type="file" accept="audio/*" onChange={handleAudio} disabled={projectLocked} /><span>Или загрузить свою MP3 / WAV</span></label>
         </div>
 
