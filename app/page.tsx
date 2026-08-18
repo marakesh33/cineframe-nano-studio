@@ -44,6 +44,7 @@ const VOICES = [
 const DEFAULT_VOICE_DIRECTION = `Native Russian male narrator, 40–55 years old. Deep, warm, mature baritone; calm authority, intelligent and emotionally restrained. Natural conversational Russian, clear diction, medium pace, meaningful pauses after important ideas. Avoid a high pitch, advertising enthusiasm, theatrical acting, whispering, singing and robotic rhythm. Read the supplied script verbatim without adding or removing words.`;
 const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
 const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
+const SCENE_SECONDS = 10;
 
 type StyleReference = { data: string; mime_type: string };
 let styleReferencePromise: Promise<StyleReference[]> | null = null;
@@ -143,8 +144,9 @@ function clock(seconds: number) {
   return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
 }
 
-function frameCountForDuration(seconds: number) {
-  return Math.max(1, Math.ceil(seconds / 7));
+function frameCountForDuration(seconds: number, openingSeconds = 0) {
+  if (openingSeconds <= 0) return Math.max(1, Math.ceil(seconds / SCENE_SECONDS));
+  return 1 + Math.max(0, Math.ceil((seconds - Math.min(seconds, openingSeconds)) / SCENE_SECONDS));
 }
 
 function shortHash(value: string) {
@@ -162,6 +164,13 @@ function extractOpeningQuote(text: string) {
   return { quote: paragraphs[0], author: paragraphs[1], rest: paragraphs.slice(2).join("\n\n") };
 }
 
+function estimateOpeningQuoteDuration(text: string) {
+  const opening = extractOpeningQuote(text);
+  if (!opening) return 0;
+  const words = opening.quote.split(/\s+/).filter(Boolean).length;
+  return Math.min(20, Math.max(3, words / 2.2 + 0.8));
+}
+
 function voiceTextForScript(text: string, includeShortsOutro = false) {
   const opening = extractOpeningQuote(text);
   const voiceText = opening ? `${opening.quote}\n\n${opening.rest}` : text;
@@ -173,7 +182,12 @@ function splitVoiceText(text: string, maxChars = 350) {
   const paragraphs = text.trim().split(/\n+/).map((part) => part.trim()).filter(Boolean);
   const chunks: string[] = [];
   let current = "";
-  for (const paragraph of paragraphs) {
+  let startIndex = 0;
+  if (paragraphs[0]?.startsWith("«") && paragraphs[0].includes("»")) {
+    chunks.push(paragraphs[0]);
+    startIndex = 1;
+  }
+  for (const paragraph of paragraphs.slice(startIndex)) {
     if ((current + "\n\n" + paragraph).length <= maxChars) {
       current = current ? `${current}\n\n${paragraph}` : paragraph;
       continue;
@@ -213,8 +227,8 @@ function cleanSceneDescription(value: string) {
   return subject.trim().replace(/[,. ]+$/, "");
 }
 
-function splitIntoScenes(text: string, count: number, duration: number, style: string, direction: string, aspect: string) {
-  const opening = extractOpeningQuote(text);
+function splitIntoScenes(text: string, count: number, duration: number, style: string, direction: string, aspect: string, openingSeconds = 0) {
+  const opening = aspect === "16:9" ? extractOpeningQuote(text) : null;
   const words = (opening?.rest || text).trim().split(/\s+/).filter(Boolean);
   const actualCount = Math.max(1, count);
   return Array.from({ length: actualCount }, (_, index): Scene => {
@@ -225,8 +239,13 @@ function splitIntoScenes(text: string, count: number, duration: number, style: s
     const fragment = opening && index === 0
       ? `${opening.quote}\n${opening.author}`
       : words.slice(from, to).join(" ") || words[Math.max(0, narrativeIndex) % Math.max(1, words.length)] || direction || "Визуальная сцена";
-    const start = index * 7;
-    const end = Math.min(duration, start + 7);
+    const quoteDuration = opening ? Math.min(duration, Math.max(0.1, openingSeconds || estimateOpeningQuoteDuration(text))) : 0;
+    const start = opening
+      ? index === 0 ? 0 : quoteDuration + (index - 1) * SCENE_SECONDS
+      : index * SCENE_SECONDS;
+    const end = opening && index === 0
+      ? quoteDuration
+      : Math.min(duration, start + SCENE_SECONDS);
     return {
       id: index + 1,
       start,
@@ -248,11 +267,15 @@ export default function Home() {
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioSource, setAudioSource] = useState<"generated" | "uploaded">("uploaded");
   const [audioIncludesShortsOutro, setAudioIncludesShortsOutro] = useState(false);
+  const [openingQuoteDuration, setOpeningQuoteDuration] = useState(0);
   const [targetDuration, setTargetDuration] = useState(60);
   const [durationMinutesInput, setDurationMinutesInput] = useState("1");
-  const frameCount = frameCountForDuration(targetDuration);
   const [quality, setQuality] = useState("1K");
   const [aspect, setAspect] = useState("16:9");
+  const openingSeconds = aspect === "16:9" && extractOpeningQuote(script)
+    ? openingQuoteDuration || estimateOpeningQuoteDuration(script)
+    : 0;
+  const frameCount = frameCountForDuration(targetDuration, openingSeconds);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [keys, setKeys] = useState("");
@@ -313,6 +336,7 @@ export default function Home() {
         setScenes(savedScenes as Scene[]);
         setSelectedId(savedScenes[0]?.id || null);
         setAudioDuration(checkpoint.audioDuration);
+        setOpeningQuoteDuration(checkpoint.openingQuoteDuration || 0);
         setAudioSource(checkpoint.audioSource || (checkpoint.audioName.startsWith("gemini-") ? "generated" : "uploaded"));
         setAudioIncludesShortsOutro(checkpoint.audioIncludesShortsOutro ?? false);
         if (savedAudio) {
@@ -339,7 +363,7 @@ export default function Home() {
           setPipelineProgress(Math.min(checkpoint.pipelineProgress, savedAudio ? 20 : 18));
           setPipelineLabel(savedAudio ? "Озвучка восстановлена. Можно продолжить создание видео." : "Проект восстановлен. Можно продолжить.");
         }
-        setCheckpointStatus(`Восстановлено: ${restoredDone} из ${savedScenes.length || frameCountForDuration(checkpoint.targetDuration)} кадров`);
+        setCheckpointStatus(`Восстановлено: ${restoredDone} из ${savedScenes.length || frameCountForDuration(checkpoint.targetDuration, checkpoint.openingQuoteDuration || 0)} кадров`);
       } catch (error) {
         if (!cancelled) setCheckpointStatus(error instanceof Error ? `Автосохранение недоступно: ${error.message}` : "Автосохранение недоступно");
       } finally {
@@ -367,6 +391,7 @@ export default function Home() {
         voiceDirection,
         audioName,
         audioDuration,
+        openingQuoteDuration,
         audioSource,
         audioIncludesShortsOutro,
         scenes: scenes.map(({ image: _image, ...scene }) => scene),
@@ -379,7 +404,7 @@ export default function Home() {
         .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `Не сохранилось: ${error.message}` : "Не удалось сохранить проект"));
     }, 300);
     return () => window.clearTimeout(timeout);
-  }, [script, direction, style, targetDuration, durationMinutesInput, quality, aspect, voice, voiceDirection, audioName, audioDuration, audioSource, audioIncludesShortsOutro, scenes, pipelineStage, pipelineProgress, pipelineLabel]);
+  }, [script, direction, style, targetDuration, durationMinutesInput, quality, aspect, voice, voiceDirection, audioName, audioDuration, openingQuoteDuration, audioSource, audioIncludesShortsOutro, scenes, pipelineStage, pipelineProgress, pipelineLabel]);
 
   const wordCount = useMemo(() => script.trim().split(/\s+/).filter(Boolean).length, [script]);
   const estimatedDuration = Math.max(1, targetDuration);
@@ -402,6 +427,7 @@ export default function Home() {
     setAudioName("");
     setAudioSource("uploaded");
     setAudioIncludesShortsOutro(false);
+    setOpeningQuoteDuration(0);
     setScenes([]);
     setSelectedId(null);
     setVideoBlob(null);
@@ -475,7 +501,7 @@ export default function Home() {
       setMessage("Снача вставь свой сценарий.");
       return;
     }
-    const next = splitIntoScenes(script, expectedScenes, estimatedDuration, style, direction, aspect);
+    const next = splitIntoScenes(script, expectedScenes, estimatedDuration, style, direction, aspect, openingSeconds);
     setScenes(next);
     setSelectedId(next[0]?.id || null);
     setMessage(`Готово: ${next.length} кадров на ${clock(estimatedDuration)}. Можно проверить промпты и запускать Nano Banana.`);
@@ -536,7 +562,7 @@ export default function Home() {
         setScript(voicePart);
         setDirection(scenesPart);
         const promptCount = scenesPart.split(/\r?\n/).filter((line) => /^\s*\d+\s*[.):—-]/.test(line)).length;
-        if (promptCount >= 3) applyTargetDuration(promptCount * 7);
+        if (promptCount >= 3) applyTargetDuration(promptCount * SCENE_SECONDS);
         setScenes([]);
         setMessage(`Загружен полный проект «${file.name}»: текст озвучки и ${promptCount} промптов сцен.`);
         return;
@@ -545,7 +571,7 @@ export default function Home() {
       const promptCount = content.split(/\r?\n/).filter((line) => /^\s*\d+\s*[.):—-]/.test(line)).length;
       if (promptCount >= 3) {
         setDirection(content);
-        applyTargetDuration(promptCount * 7);
+        applyTargetDuration(promptCount * SCENE_SECONDS);
         setScenes([]);
         setMessage(`Загружен файл «${file.name}»: найдено ${promptCount} промптов сцен.`);
       } else {
@@ -637,14 +663,53 @@ export default function Home() {
     }
   }
 
-  async function requestLongVoiceTrack(list: string[], text: string, desiredSeconds: number, onProgress?: (completed: number, total: number) => void) {
+  async function trimVoicePartToSpeech(file: File) {
+    const audioContext = new AudioContext({ sampleRate: 24000 });
+    try {
+      const buffer = await audioContext.decodeAudioData(await file.arrayBuffer());
+      const threshold = 0.004;
+      let lastAudibleSample = buffer.length - 1;
+      outer: for (; lastAudibleSample > 0; lastAudibleSample--) {
+        for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+          if (Math.abs(buffer.getChannelData(channel)[lastAudibleSample] || 0) >= threshold) break outer;
+        }
+      }
+      const sampleRate = buffer.sampleRate || 24000;
+      const exactSamples = Math.min(buffer.length, lastAudibleSample + Math.round(sampleRate * 0.12));
+      const pcm = new Uint8Array(exactSamples * 2);
+      const view = new DataView(pcm.buffer);
+      for (let sample = 0; sample < exactSamples; sample++) {
+        let value = 0;
+        for (let channel = 0; channel < buffer.numberOfChannels; channel++) value += buffer.getChannelData(channel)[sample] || 0;
+        value = Math.max(-1, Math.min(1, value / Math.max(1, buffer.numberOfChannels)));
+        view.setInt16(sample * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+      }
+      return new File([makeWav([pcm], sampleRate)], file.name, { type: "audio/wav" });
+    } finally {
+      await audioContext.close();
+    }
+  }
+
+  async function requestLongVoiceTrack(
+    list: string[],
+    text: string,
+    desiredSeconds: number,
+    onProgress?: (completed: number, total: number) => void,
+    onOpeningDuration?: (seconds: number) => void,
+  ) {
     const chunks = splitVoiceText(text);
     const totalWords = chunks.reduce((total, chunk) => total + chunk.split(/\s+/).filter(Boolean).length, 0);
+    const hasOpeningChunk = chunks[0]?.startsWith("«") && chunks[0].includes("»");
+    const remainingWords = chunks.slice(hasOpeningChunk ? 1 : 0).reduce((total, chunk) => total + chunk.split(/\s+/).filter(Boolean).length, 0);
+    let exactOpeningSeconds = 0;
     const files: File[] = [];
     for (let index = 0; index < chunks.length; index++) {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
-      const chunkSeconds = Math.max(8, desiredSeconds * (chunkWords / Math.max(1, totalWords)));
-      const cacheKey = `${voice}:${Math.round(desiredSeconds)}:${index}:${voiceDirection}:${chunks[index]}`;
+      const isOpeningChunk = hasOpeningChunk && index === 0;
+      const availableSeconds = isOpeningChunk || !hasOpeningChunk ? desiredSeconds : Math.max(8, desiredSeconds - exactOpeningSeconds);
+      const weightWords = hasOpeningChunk && !isOpeningChunk ? remainingWords : totalWords;
+      const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, availableSeconds * (chunkWords / Math.max(1, weightWords)));
+      const cacheKey = `cadence10:${voice}:${Math.round(desiredSeconds)}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
@@ -655,6 +720,10 @@ export default function Home() {
         }
       }
       if (cached) {
+        if (isOpeningChunk) {
+          exactOpeningSeconds = await measureAudio(cached);
+          onOpeningDuration?.(exactOpeningSeconds);
+        }
         files.push(cached);
         onProgress?.(index + 1, chunks.length);
         continue;
@@ -667,7 +736,13 @@ export default function Home() {
         partDuration = await measureAudio(part);
       }
       if (partDuration < chunkSeconds * 0.45) throw new Error(`Gemini не дочитала часть ${index + 1}. Нажми «Продолжить озвучку» — готовые части сохранятся.`);
-      part = await padVoicePart(part, chunkSeconds);
+      if (isOpeningChunk) {
+        part = await trimVoicePartToSpeech(part);
+        exactOpeningSeconds = await measureAudio(part);
+        onOpeningDuration?.(exactOpeningSeconds);
+      } else {
+        part = await padVoicePart(part, chunkSeconds);
+      }
       voiceChunkCacheRef.current.set(cacheKey, part);
       await saveProjectBlob(storedKey, part)
         .then(() => setCheckpointStatus(`Автосохранение озвучки: часть ${index + 1} из ${chunks.length}`))
@@ -691,7 +766,13 @@ export default function Home() {
     const voicePartCount = splitVoiceText(voiceScript).length;
     setMessage(`Gemini создаёт озвучку частями: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
-      await attachAudio(await requestLongVoiceTrack(list, voiceScript, targetDuration, (completed, total) => setMessage(`Создаю озвучку: часть ${completed} из ${total}…`)), { preserveScenes: true, source: "generated", includesShortsOutro: aspect === "9:16" });
+      await attachAudio(await requestLongVoiceTrack(
+        list,
+        voiceScript,
+        targetDuration,
+        (completed, total) => setMessage(`Создаю озвучку: часть ${completed} из ${total}…`),
+        aspect === "16:9" && extractOpeningQuote(script) ? setOpeningQuoteDuration : undefined,
+      ), { preserveScenes: true, source: "generated", includesShortsOutro: aspect === "9:16" });
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Озвучка не создалась";
       setVoiceError(reason);
@@ -759,7 +840,7 @@ export default function Home() {
     if (!script.trim()) { setMessage("Вставь текст для озвучки в большое поле сверху."); return; }
     let activeScenes = sourceScenes || scenes;
     if (!activeScenes.length) {
-      activeScenes = splitIntoScenes(script, frameCount, estimatedDuration, style, direction, aspect);
+      activeScenes = splitIntoScenes(script, frameCount, estimatedDuration, style, direction, aspect, openingSeconds);
       setScenes(activeScenes);
       setSelectedId(activeScenes[0]?.id || null);
     }
@@ -868,22 +949,20 @@ export default function Home() {
 
       const drawOpeningQuote = (timestamp: number) => {
         if (!openingQuote) return;
-        const quoteDuration = Math.min(7, duration);
+        const quoteDuration = Math.min(videoScenes[0]?.end || openingQuoteDuration || estimateOpeningQuoteDuration(script), duration);
         if (timestamp >= quoteDuration) return;
         const smooth = (value: number) => {
           const clamped = Math.max(0, Math.min(1, value));
           return clamped * clamped * (3 - 2 * clamped);
         };
-        const fadeIn = smooth(timestamp / 0.85);
-        const fadeOut = smooth((quoteDuration - timestamp) / 1.15);
-        const alpha = Math.min(fadeIn, fadeOut);
-        const entrance = smooth(timestamp / 1.2);
+        const fadeOut = smooth((quoteDuration - timestamp) / 0.45);
+        const entrance = smooth(timestamp / 0.75);
         const maxTextWidth = width * 0.72;
         const quoteText = openingQuote.quote.replace(/^«|»$/g, "").trim();
         const fontSize = quoteText.length > 180 ? 29 : quoteText.length > 115 ? 34 : 40;
 
         context.save();
-        context.globalAlpha = alpha;
+        context.globalAlpha = fadeOut * (0.45 + entrance * 0.55);
         const shade = context.createRadialGradient(width / 2, height / 2, width * 0.08, width / 2, height / 2, width * 0.62);
         shade.addColorStop(0, "rgba(4, 7, 9, 0.52)");
         shade.addColorStop(1, "rgba(3, 5, 7, 0.84)");
@@ -921,11 +1000,20 @@ export default function Home() {
         context.fillStyle = "#f4efe5";
         lines.forEach((line, index) => {
           const decorated = lines.length === 1 ? `«${line}»` : index === 0 ? `«${line}` : index === lines.length - 1 ? `${line}»` : line;
+          const lineProgress = smooth((timestamp - 0.12 - index * 0.16) / 0.52);
+          context.save();
+          context.globalAlpha *= lineProgress;
+          context.translate(0, (1 - lineProgress) * 16);
+          context.filter = `blur(${(1 - lineProgress) * 5}px)`;
           context.fillText(decorated, 0, textTop + index * lineHeight);
+          context.restore();
         });
         context.shadowBlur = 0;
         context.font = "italic 22px Georgia, serif";
         context.fillStyle = "#d7ad68";
+        const authorProgress = smooth((timestamp - 0.38 - lines.length * 0.16) / 0.55);
+        context.globalAlpha *= authorProgress;
+        context.translate(0, (1 - authorProgress) * 10);
         context.fillText(openingQuote.author, 0, textTop + lines.length * lineHeight + 34);
         context.restore();
       };
@@ -985,6 +1073,7 @@ export default function Home() {
         aspect,
         duration: estimatedDuration,
         openingQuote: aspect === "16:9" ? extractOpeningQuote(script) : null,
+        openingQuoteDuration: aspect === "16:9" ? openingQuoteDuration || scenes[0]?.end : 0,
         onProgress: setCapCutMessage,
       });
       setCapCutMessage(`✓ Проект «${projectName}» добавлен. Открой CapCut.`);
@@ -1011,18 +1100,26 @@ export default function Home() {
     setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceScript).length} частей…`);
     setVoiceError("");
     try {
-      const savedVoiceIsOutdated = aspect === "9:16" && audioFile && audioSource === "generated" && !audioIncludesShortsOutro;
+      const hasOpeningQuote = aspect === "16:9" && Boolean(extractOpeningQuote(script));
+      const savedVoiceIsOutdated = Boolean(audioFile && audioSource === "generated" && (
+        (aspect === "9:16" && !audioIncludesShortsOutro)
+        || (hasOpeningQuote && !openingQuoteDuration)
+      ));
       let soundtrack = savedVoiceIsOutdated ? null : audioFile;
       let duration = audioDuration;
+      let exactOpeningDuration = openingQuoteDuration;
       if (savedVoiceIsOutdated) {
-        setPipelineLabel("Обновляю старую озвучку и добавляю переход на основной канал…");
-        setMessage("Старая озвучка была создана без фирменной фразы. Пересоздаю её автоматически.");
+        setPipelineLabel(hasOpeningQuote ? "Обновляю озвучку для точной синхронизации цитаты…" : "Обновляю старую озвучку и добавляю переход на основной канал…");
+        setMessage(hasOpeningQuote ? "Пересоздаю старую озвучку, чтобы первый кадр совпал с голосом цитаты." : "Старая озвучка была создана без фирменной фразы. Пересоздаю её автоматически.");
       }
       if (!soundtrack) {
         soundtrack = await requestLongVoiceTrack(list, voiceScript, targetDuration, (completed, total) => {
           setPipelineProgress(2 + (completed / total) * 16);
           setPipelineLabel(`Создаю озвучку: часть ${completed} из ${total}`);
-        });
+        }, hasOpeningQuote ? (seconds) => {
+          exactOpeningDuration = seconds;
+          setOpeningQuoteDuration(seconds);
+        } : undefined);
         duration = await measureAudio(soundtrack);
         if (splitVoiceText(voiceScript).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
           setPipelineLabel(`Корректирую темп озвучки: было ${clock(duration)}, нужно ${clock(targetDuration)}…`);
@@ -1032,13 +1129,17 @@ export default function Home() {
         await attachAudio(soundtrack, { preserveScenes: true, source: "generated", includesShortsOutro: aspect === "9:16" });
       }
       duration = targetDuration;
+      const planOpeningSeconds = hasOpeningQuote ? exactOpeningDuration || estimateOpeningQuoteDuration(script) : 0;
+      const planFrameCount = frameCountForDuration(duration, planOpeningSeconds);
       setPipelineProgress(20);
       setPipelineStage("frames");
-      setPipelineLabel(`Создаю ${frameCount} кадров в закреплённом стиле канала…`);
-      const reusablePlan = scenes.length === frameCount
+      setPipelineLabel(`Создаю ${planFrameCount} кадров в закреплённом стиле канала…`);
+      const reusablePlan = scenes.length === planFrameCount
         && Math.abs((scenes.at(-1)?.end || 0) - duration) < 1
+        && (!hasOpeningQuote || Math.abs((scenes[0]?.end || 0) - planOpeningSeconds) < 0.05)
+        && scenes.slice(hasOpeningQuote ? 1 : 0, -1).every((scene) => Math.abs(scene.end - scene.start - SCENE_SECONDS) < 0.05)
         && scenes.every((scene, index) => scene.id === index + 1);
-      const plan = reusablePlan ? scenes : splitIntoScenes(script, frameCount, duration, style, direction, aspect);
+      const plan = reusablePlan ? scenes : splitIntoScenes(script, planFrameCount, duration, style, direction, aspect, planOpeningSeconds);
       setScenes(plan);
       setSelectedId(plan[0]?.id || null);
       let generated = await generateAll(plan, list, (completed, total) => {
@@ -1136,7 +1237,7 @@ export default function Home() {
           <textarea className="mainScript" value={script} onChange={(e) => { void invalidateGeneratedProject(); setScript(e.target.value); }} placeholder="Вставь сюда полный текст ролика…" autoFocus disabled={projectLocked} />
           <div className="scriptMeta"><span>{wordCount} слов</span><span>План: {clock(estimatedDuration)}</span></div>
           <div className="quoteHint">Заставка для лонга: первая строка — «Цитата», вторая — Автор. Цитата появится красиво и с анимацией; субтитров не будет.</div>
-          <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { void invalidateGeneratedProject(); setDirection(e.target.value); }} placeholder={"Напиши сцены отдельными строками:\n1. A thoughtful man standing in a vast library...\n2. The same man studying several documents...\n3. ..."} disabled={projectLocked} /><small>Каждая пронумерованная строка — отдельный кадр. Для выбранной длины нужно {frameCount} строк: новая сцена строго каждые 7 секунд. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
+          <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { void invalidateGeneratedProject(); setDirection(e.target.value); }} placeholder={"Напиши сцены отдельными строками:\n1. A thoughtful man standing in a vast library...\n2. The same man studying several documents...\n3. ..."} disabled={projectLocked} /><small>Каждая пронумерованная строка — отдельный кадр. Обычные кадры идут ровно по 10 секунд; первый кадр лонга с цитатой синхронизируется с голосом. Нужно примерно {frameCount} строк. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
         </div>
 
         <div className="quickDivider" />
@@ -1161,10 +1262,10 @@ export default function Home() {
           <div className="quickTitle"><b>3</b><div><h2>Параметры видео</h2><p>Только три главные настройки.</p></div></div>
           <div className="bigControls">
             <label>Длительность, минут<input type="text" inputMode="decimal" value={durationMinutesInput} onChange={(e) => changeDurationMinutes(e.target.value)} onBlur={() => { const minutes = Number(durationMinutesInput.replace(",", ".")); if (!Number.isFinite(minutes) || minutes < 0.5) applyTargetDuration(targetDuration); }} placeholder="Например, 45" disabled={projectLocked} /><small>{audioDuration ? `Озвучка ${clock(audioDuration)} · видео ${clock(targetDuration)}` : "Можно написать 45, 60, 90… без лимита"}</small></label>
-            <label>Смена кадра<div className="staticControl">Каждые 7 секунд</div><small>{frameCount} сцен на {clock(targetDuration)}</small></label>
+            <label>Смена кадра<div className="staticControl">Каждые 10 секунд</div><small>{aspect === "16:9" && openingSeconds ? `Цитата ${openingQuoteDuration ? clock(openingQuoteDuration) : "уточнится по голосу"} · ` : ""}{frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { void invalidateGeneratedProject(); setAspect(e.target.value); }} disabled={projectLocked}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
-          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +5° → −5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "Цитата в начале · без субтитров" : "Фирменная фраза в конце · без субтитров"}</span></div>
+          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: анимация +5° → −5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "Анимированная цитата точно по голосу · без субтитров" : "Фирменная фраза в конце · без субтитров"}</span></div>
           <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Стиль канала закреплён</b><small>Oil painting · chiaroscuro · red & teal · visible brushstrokes · film grain</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : scenes.length || audioFile ? "ПРОДОЛЖИТЬ СОХРАНЁННЫЙ ПРОЕКТ" : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
           <div className="autosaveStatus"><i /> <span>{checkpointStatus}</span><small>Кадры, озвучка, прогресс и MP4 сохраняются в этом браузере.</small></div>

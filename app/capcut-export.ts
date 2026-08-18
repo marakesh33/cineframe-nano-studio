@@ -37,6 +37,7 @@ type ExportOptions = {
   aspect: string;
   duration: number;
   openingQuote?: { quote: string; author: string } | null;
+  openingQuoteDuration?: number;
   onProgress?: (message: string) => void;
 };
 
@@ -338,7 +339,7 @@ export function buildCapCutDraft(
   audioSegment.volume = 1;
   audioSegment.last_nonzero_volume = 1;
   audioSegment.visible = true;
-  const quoteDurationUs = microseconds(Math.min(7, options.duration));
+  const quoteDurationUs = microseconds(Math.min(options.openingQuoteDuration || 7, options.duration));
   const useEditableQuote = Boolean(isLongForm && options.openingQuote && sourceTextTrack && sourceTextSegment && sourceTextMaterial);
   const useBakedQuoteFallback = Boolean(isLongForm && options.openingQuote && !useEditableQuote);
   audioSegment.clip = { ...(audioSegment.clip || {}), alpha: useBakedQuoteFallback ? 1 : 0 };
