@@ -27,21 +27,22 @@ type Scene = {
 
 type PipelineStage = "idle" | "voice" | "frames" | "render" | "done" | "error";
 
-const DEFAULT_STYLE = `cinematic oil-painting style, dramatic chiaroscuro lighting, rich red and teal color grading, deep contrast between warm crimson highlights and cool cyan shadows, painterly visible brushstrokes, atmospheric haze and film grain, moody and emotionally charged atmosphere, hyper-detailed realism blended with expressive painting texture, cinematic 16:9 widescreen composition, dramatic single-light-source lighting, no text, no watermark`;
+const DEFAULT_STYLE = `old soft cinematic oil-painting style, deliberately painterly and slightly dreamy, broad loose brushstrokes, softened edges and facial details, gentle optical blur, low microcontrast, hazy bloom and smoky atmosphere, muted black and deep teal shadows, glowing crimson-red and warm amber practical lights, expressive human silhouettes and readable emotions, subtle analog film grain and vintage compression texture, dark but readable exposure, cinematic 16:9 widescreen composition, no sharp modern digital detail, no glossy CGI, no hyperreal skin, no crisp vector-like illustration, no text, no subtitles, no logo, no watermark`;
 
 const STYLE_REFERENCE_PATHS = [
   "/style-references/psychology-style-01-clean.jpg",
   "/style-references/psychology-style-02-clean.jpg",
+  "/style-references/psychology-style-old-soft.jpg",
 ];
 
 const VOICES = [
-  { id: "Gacrux", label: "Голос из «Богатство — это просто»" },
+  { id: "Gacrux", label: "Gacrux · голос хитов · 111 слов/мин" },
   { id: "Charon", label: "Charon · спокойный рассказчик" },
   { id: "Schedar", label: "Schedar · ровный документальный" },
   { id: "Fenrir", label: "Fenrir · уверенный и живой" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Match the narrator from the reference video «Богатство — это просто. Но жестоко» as closely as possible. Native Russian male, 40–55 years old; deep warm mature baritone, calm authority, intelligent and emotionally restrained. Keep the measured cadence near 111 words per minute. Use natural medium-length pauses after complete ideas, firm but subtle emphasis on contrasts, and a strong confident first sentence. Never rush. Avoid advertising enthusiasm, theatrical acting, whispering, singing, exaggerated emotion and robotic rhythm. Read the supplied script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `Match the narrator from the reference video «Богатство — это просто. Но жестоко» as closely as possible. Use the Gacrux voice as a native Russian male narrator, 40–55 years old: deep warm mature baritone, calm authority, intelligent and emotionally restrained. Hold a continuous measured cadence of 108–114 words per minute, targeting exactly 111. Use short natural sentence pauses of about 0.25–0.45 seconds and paragraph pauses no longer than 0.7 seconds. Never stretch vowels, slow down meditatively or insert dramatic silence. The first sentence is a firm, clear hook; contrasts receive subtle confident emphasis. Avoid advertising enthusiasm, theatrical acting, whispering, singing, exaggerated emotion and robotic rhythm. Read the supplied script verbatim without adding or removing words.`;
 const POPULAR_VOICE_WPM = 111;
 const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
 const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
@@ -238,12 +239,16 @@ function splitIntoScenes(text: string, count: number, duration: number, style: s
     const fragment = words.slice(from, to).join(" ") || words[index % Math.max(1, words.length)] || direction || "Визуальная сцена";
     const start = index * SCENE_SECONDS;
     const end = Math.min(duration, start + SCENE_SECONDS);
+    const describedScene = cleanSceneDescription(shotDescription(direction, index, fragment));
+    const scenePrompt = index === 0
+      ? `OPENING HOOK FRAME — make this image noticeably more thoughtful and psychologically intriguing than the remaining sequence. Show one main person caught in a quiet moment of realization just before an important decision: pensive indirect gaze, restrained tension in the face and hands, expressive silhouette, meaningful negative space and one unanswered visual question. Avoid a generic action collage, a smiling presenter or a busy crowd. Directly connect the emotion and setting to the opening hook. ${describedScene}`
+      : describedScene;
     return {
       id: index + 1,
       start,
       end,
       text: fragment,
-      prompt: `${cleanSceneDescription(shotDescription(direction, index, fragment))}, ${style.replace("cinematic 16:9 widescreen composition", aspect === "9:16" ? "cinematic 9:16 vertical composition" : "cinematic 16:9 widescreen composition")}`,
+      prompt: `${scenePrompt}, ${style.replace("cinematic 16:9 widescreen composition", aspect === "9:16" ? "cinematic 9:16 vertical composition" : "cinematic 16:9 widescreen composition")}`,
       status: "ready",
     };
   });
@@ -316,7 +321,7 @@ export default function Home() {
         checkpointIdRef.current = checkpoint.checkpointId;
         setScript(checkpoint.script);
         setDirection(checkpoint.direction);
-        setStyle(checkpoint.style || DEFAULT_STYLE);
+        setStyle(!checkpoint.style || checkpoint.style.includes("hyper-detailed realism") ? DEFAULT_STYLE : checkpoint.style);
         setTargetDuration(checkpoint.targetDuration);
         setDurationMinutesInput(checkpoint.durationMinutesInput);
         setQuality(checkpoint.quality === "1K" ? "2K" : checkpoint.quality || "2K");
@@ -702,7 +707,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `wealth-simple-voice-v1:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `wealth-simple-voice-v2:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
@@ -724,9 +729,13 @@ export default function Home() {
       const requestedSeconds = chunkSeconds;
       let part = await requestVoiceTrack(list, chunks[index], requestedSeconds);
       let partDuration = await measureAudio(part);
-      if (partDuration < chunkSeconds * 0.55) {
-        part = await requestVoiceTrack(list, chunks[index], requestedSeconds, partDuration);
-        partDuration = await measureAudio(part);
+      if (partDuration < chunkSeconds * 0.9 || partDuration > chunkSeconds * 1.12) {
+        const retry = await requestVoiceTrack(list, chunks[index], requestedSeconds, partDuration);
+        const retryDuration = await measureAudio(retry);
+        if (Math.abs(retryDuration - chunkSeconds) < Math.abs(partDuration - chunkSeconds)) {
+          part = retry;
+          partDuration = retryDuration;
+        }
       }
       if (partDuration < chunkSeconds * 0.45) throw new Error(`Gemini не дочитала часть ${index + 1}. Нажми «Продолжить озвучку» — готовые части сохранятся.`);
       if (isOpeningChunk) {
@@ -873,14 +882,14 @@ export default function Home() {
     setIsRendering(true);
     setRenderProgress(0);
     setMessage(aspect === "16:9"
-      ? "Собираю лонг MP4: 1080p · 30 FPS · плавное покачивание ±2,5° · мягкие переходы…"
+      ? "Собираю лонг MP4: 1080p · 60 FPS · плавное покачивание ±2,5° · мягкие переходы…"
       : "Собираю Shorts MP4 без наклона кадров, с озвучкой…");
     try {
       const landscapeSize = quality === "1K" ? [1280, 720] : quality === "4K" ? [2560, 1440] : [1920, 1080];
       const width = aspect === "9:16" ? landscapeSize[1] : landscapeSize[0];
       const height = aspect === "9:16" ? landscapeSize[0] : landscapeSize[1];
       const duration = videoScenes.at(-1)?.end || durationOverride;
-      const fps = 30;
+      const fps = aspect === "16:9" ? 60 : 30;
       const frameDuration = 1 / fps;
       const totalFrames = Math.ceil(duration * fps);
       const canvas = document.createElement("canvas");
@@ -1287,8 +1296,8 @@ export default function Home() {
             <label>Смена кадра<div className="staticControl">Каждые 10 секунд</div><small>Мягкий переход 0,35 сек · {frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { void invalidateGeneratedProject(); setAspect(e.target.value); }} disabled={projectLocked}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
-          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: плавная анимация +2,5° → −2,5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "1080p · 30 FPS · сильный хук с первой секунды · без субтитров" : "Фирменная фраза в конце · без субтитров"}</span></div>
-          <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Стиль канала закреплён</b><small>Oil painting · chiaroscuro · red & teal · visible brushstrokes · film grain</small></div></details>
+          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: плавная анимация +2,5° → −2,5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "1080p · 60 FPS · задумчивый хук с первой секунды · без субтитров" : "Фирменная фраза в конце · без субтитров"}</span></div>
+          <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Старый мягкий стиль канала закреплён</b><small>Soft oil painting · broad brushstrokes · red & teal haze · analog grain</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : scenes.length || audioFile ? "ПРОДОЛЖИТЬ СОХРАНЁННЫЙ ПРОЕКТ" : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
           <div className="autosaveStatus"><i /> <span>{checkpointStatus}</span><small>Кадры, озвучка, прогресс и MP4 сохраняются в этом браузере.</small></div>
           <div className={`pipelinePanel ${pipelineStage}`} aria-live="polite">
