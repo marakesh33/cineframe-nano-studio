@@ -27,7 +27,7 @@ type Scene = {
 
 type PipelineStage = "idle" | "voice" | "frames" | "render" | "done" | "error";
 
-const DEFAULT_STYLE = `old soft cinematic oil-painting style, deliberately painterly and slightly dreamy, broad loose brushstrokes, softened edges and facial details, gentle optical blur, low microcontrast, hazy bloom and smoky atmosphere, muted black and deep teal shadows, glowing crimson-red and warm amber practical lights, expressive human silhouettes and readable emotions, subtle analog film grain and vintage compression texture, dark but readable exposure, cinematic 16:9 widescreen composition, no sharp modern digital detail, no glossy CGI, no hyperreal skin, no crisp vector-like illustration, no text, no subtitles, no logo, no watermark`;
+const DEFAULT_STYLE = `old soft cinematic oil-painting style, deliberately painterly and slightly dreamy, broad loose brushstrokes, softened edges and facial details, gentle optical blur, low microcontrast, hazy bloom and smoky atmosphere, lifted deep teal shadows with clearly readable midtone detail, glowing crimson-red and warm amber practical lights, expressive human silhouettes and readable emotions, subtle analog film grain and vintage compression texture, moderately bright night exposure matching the older channel frames, about 15–20 percent brighter than a dark noir frame, no crushed blacks, cinematic 16:9 widescreen composition, no sharp modern digital detail, no glossy CGI, no hyperreal skin, no crisp vector-like illustration, no text, no subtitles, no logo, no watermark`;
 
 const STYLE_REFERENCE_PATHS = [
   "/style-references/psychology-style-01-clean.jpg",
