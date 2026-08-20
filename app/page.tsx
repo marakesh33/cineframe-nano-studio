@@ -40,7 +40,7 @@ const VOICES = [
   { id: "Achird", label: "Achird · живой дружелюбный Gemini" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian man speaking quietly and personally to one listener in a calm room. Keep the established voice profile: medium male register around 120–130 Hz, warm rounded timbre and relaxed consonants. Use restrained loudness throughout, as if the listener is sitting nearby. Ease gently into the first sentence: begin soft, unhurried and slightly reflective, with no hard attack, raised volume or emphatic stress on the opening words. The speaker must understand and care about each thought, but emotion stays intimate rather than performative. Let meaning create small natural changes in pitch and pace, soften imperfect endings, and give only truly important words a mild emphasis. Connect related sentences as one thought. Keep an average pace near 106–108 words per minute. Sound like a real person thinking aloud—not a narrator, presenter or motivational speaker. Avoid urgency, sternness, dramatic hooks, commanding delivery, perfect studio diction, repeated sentence melody, audiobook cadence, advertising, whispering and stretched vowels. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian man speaking personally to one listener in a calm room. Keep the established voice profile: medium male register around 120–130 Hz, warm rounded timbre, relaxed consonants and normal clear conversational loudness. The voice must be fully voiced and present—never hushed, breathy or whispered. Ease naturally into the first sentence: begin relaxed and unhurried, but clear, with no hard attack or exaggerated stress on the opening words. The speaker understands and cares about each thought, while emotion stays genuine rather than performative. Let meaning create small natural changes in pitch and pace, soften imperfect endings, and give only truly important words a mild emphasis. Connect related sentences as one thought. Keep an average pace near 106–108 words per minute. Sound like a real person thinking aloud—not a narrator, presenter or motivational speaker. Avoid urgency, sternness, dramatic hooks, commanding delivery, perfect studio diction, repeated sentence melody, audiobook cadence, advertising, whispering and stretched vowels. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
 const POPULAR_VOICE_WPM = 106;
 const VOICE_TEMPO = 1;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
@@ -187,7 +187,7 @@ async function tightenLongVoicePauses(file: File) {
     const threshold = 0.008;
     const minimumSilence = Math.round(sampleRate * 0.58);
     const keptSilence = Math.round(sampleRate * 0.42);
-    const outputGain = 0.82;
+    const outputGain = 1;
     const cuts: Array<[number, number]> = [];
     let silentStart = -1;
     for (let sample = 0; sample <= buffer.length; sample++) {
@@ -796,7 +796,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `natural-achird-v22:gemini-3.1-calm-soft-entry:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `natural-achird-v23:gemini-3.1-calm-clear-entry:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
