@@ -1,4 +1,4 @@
-const ALLOWED_VOICES = new Set(["Gacrux", "Charon", "Achird", "Schedar", "Fenrir"]);
+const ALLOWED_VOICES = new Set(["Gacrux", "Charon", "Achird", "Schedar", "Fenrir", "Algieba"]);
 
 type AudioPart = { data: string; mime: string };
 
@@ -123,7 +123,7 @@ export async function POST(request: Request) {
 
     const voice = ALLOWED_VOICES.has(body.voice || "") ? body.voice : "Achird";
     if (!apiKey) return Response.json({ error: "Нужен Google API key" }, { status: 400 });
-    const direction = body.direction?.trim() || "Use Achird as a natural native Russian male narrator matching the shared delivery profile of the channel's most successful videos. Keep a medium warm male register around 118–126 Hz, normal full speaking volume, relaxed consonants and clear but not over-polished Russian diction. Maintain a flowing pace of 126–132 words per minute, targeting 129. Speak in connected thought groups: short linking words may move faster, important words receive brief natural weight, and sentence endings soften without losing clarity. Use quick breaths and pauses around 0.18–0.35 seconds, with an occasional 0.45–0.6 second pause only when the idea genuinely changes. Begin directly and confidently but without shouting, trailer drama or a hard artificial attack. Let interest, warning and conviction appear naturally from the meaning instead of using one fixed emotion. Avoid slow meditation, robotic precision, equal spacing between words, identical sentence melodies, theatrical acting, whispering and stretched vowels. Preserve clear Russian pronunciation.";
+    const direction = body.direction?.trim() || "Use Algieba as a warm, smooth native Russian male essay narrator. Speak like a real thoughtful person in a quiet one-to-one conversation: natural contemporary Russian, meaning-led rhythm, subtle emotional variation, relaxed clear diction and gently varied sentence melody. Begin softly without striking the first word. Never sound like an announcer, trailer narrator, meditation app or synthetic assistant. Avoid fixed cadence, mechanical pauses, identical sentence endings, theatrical drama, whispering and stretched vowels.";
     const desiredSeconds = Number.isFinite(body.desiredSeconds) ? Math.max(0, Math.min(600, Math.round(body.desiredSeconds || 0))) : 0;
     const previousSeconds = Number.isFinite(body.previousSeconds) ? Math.max(0, Math.round(body.previousSeconds || 0)) : 0;
     const timing = desiredSeconds

@@ -35,14 +35,24 @@ const STYLE_REFERENCE_PATHS = [
 ];
 
 const VOICES = [
-  { id: "Charon", label: "Charon · спокойный информативный (рекомендую)" },
+  { id: "Algieba", label: "Algieba · мягкий живой мужской (новый)" },
+  { id: "Charon", label: "Charon · спокойный информативный" },
   { id: "Gacrux", label: "Gacrux · зрелый и мягкий" },
   { id: "Schedar", label: "Schedar · ровный и естественный" },
   { id: "Achird", label: "Achird · дружелюбный (текущий старый)" },
   { id: "Fenrir", label: "Fenrir · энергичный" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Use Charon as a natural native Russian male narrator matching the shared delivery profile of the channel's most successful videos. Keep a medium warm male register around 118–126 Hz, normal full speaking volume, relaxed consonants and clear but not over-polished Russian diction. Maintain a flowing pace of 126–132 words per minute, targeting 129. Speak in connected thought groups: short linking words may move faster, important words receive brief natural weight, and sentence endings soften without losing clarity. Use quick breaths and pauses around 0.18–0.35 seconds, with an occasional 0.45–0.6 second pause only when the idea genuinely changes. Begin directly and confidently but without shouting, trailer drama or a hard artificial attack. Let interest, warning and conviction appear naturally from the meaning instead of using one fixed emotion. Avoid slow meditation, robotic precision, equal spacing between words, identical sentence melodies, theatrical acting, whispering and stretched vowels. Read the supplied Russian script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `# AUDIO PROFILE
+Nikolai is a native Russian male essay narrator in his early thirties. His voice is warm, smooth and grounded, with the natural imperfections of a real person speaking from experience. He is intelligent without sounding academic, intimate without whispering, and emotionally present without acting.
+
+# THE SCENE
+Nikolai is recording late in a quiet, softly lit room for one attentive listener. He understands the thought first and then says it, as if this is a genuine conversation rather than a prepared voice-over. The microphone is close, but his voice remains fully voiced, clean and comfortable.
+
+# DIRECTOR'S NOTES
+Speak natural contemporary Russian. Let meaning control rhythm: move easily through linking words, give important ideas subtle weight, and allow tiny thinking moments only where the thought truly turns. Keep a calm flowing pace suitable for a psychological YouTube essay. Vary sentence melody and energy gently so consecutive sentences never land in the same mechanical pattern. Begin softly and naturally, as though continuing an interesting conversation; never hit the first word. Use restrained human curiosity, recognition, concern and warmth when the text calls for them. Keep diction clear but pleasantly relaxed, with natural consonants and no artificial over-articulation.
+
+Never sound like an announcer, trailer narrator, meditation app, audiobook caricature or synthetic assistant. No fixed cadence, no metronomic pauses, no identical sentence endings, no grave authority, no theatrical drama, no whisper, no stretched vowels and no audible performance tags. Read the supplied Russian script verbatim without adding, removing or paraphrasing words.`;
 const POPULAR_VOICE_WPM = 129;
 const VOICE_TEMPO = 1;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
@@ -369,7 +379,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [isGeneratingVoicePreview, setIsGeneratingVoicePreview] = useState(false);
-  const [voice, setVoice] = useState("Charon");
+  const [voice, setVoice] = useState("Algieba");
   const [voiceDirection, setVoiceDirection] = useState(DEFAULT_VOICE_DIRECTION);
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -532,7 +542,7 @@ export default function Home() {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
     setVoice(nextVoice);
-    setVoiceDirection((current) => current.replace(/\b(?:Achird|Charon|Gacrux|Schedar|Fenrir)\b/g, nextVoice));
+    setVoiceDirection(DEFAULT_VOICE_DIRECTION.replace(/\bAlgieba\b/g, nextVoice));
     setAudioDuration(0);
     setAudioFile(null);
     setAudioUrl("");
@@ -726,7 +736,7 @@ export default function Home() {
         response = await fetch("/api/tts", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection.replace(/\b(?:Achird|Charon|Gacrux|Schedar|Fenrir)\b/g, voice), desiredSeconds, previousSeconds, engine: "gemini-2.5-pro" }),
+          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection.replace(/\b(?:Achird|Charon|Gacrux|Schedar|Fenrir|Algieba)\b/g, voice), desiredSeconds, previousSeconds, engine: "gemini-2.5-pro" }),
         });
       } catch {
         lastError = "Сетевое соединение прервалось. Автоматически пробую следующий ключ…";
