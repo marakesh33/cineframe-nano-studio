@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from "mediabunny";
+import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, StreamTarget, type StreamTargetChunk } from "mediabunny";
 import { SimpleFilter, SoundTouch, WebAudioBufferSource } from "soundtouchjs";
 import { addProjectToCapCut } from "./capcut-export";
 import {
@@ -981,14 +981,16 @@ export default function Home() {
     setIsRendering(true);
     setRenderProgress(0);
     setMessage(aspect === "16:9"
-      ? "Собираю лонг MP4: 1080p · 60 FPS · плавное покачивание ±2,5° · мягкие переходы…"
+      ? `Собираю лонг MP4: 1080p · ${durationOverride <= 5 * 60 ? 60 : 30} FPS · плавное покачивание ±2,5° · мягкие переходы…`
       : "Собираю Shorts MP4 без наклона кадров, с озвучкой…");
     try {
       const landscapeSize = quality === "1K" ? [1280, 720] : quality === "4K" ? [2560, 1440] : [1920, 1080];
       const width = aspect === "9:16" ? landscapeSize[1] : landscapeSize[0];
       const height = aspect === "9:16" ? landscapeSize[0] : landscapeSize[1];
       const duration = videoScenes.at(-1)?.end || durationOverride;
-      const fps = aspect === "16:9" ? 60 : 30;
+      // Static illustrations remain smooth at 30 FPS, while halving the work for long videos.
+      // Keep 60 FPS for short long-form tests only.
+      const fps = aspect === "16:9" && duration <= 5 * 60 ? 60 : 30;
       const frameDuration = 1 / fps;
       const totalFrames = Math.ceil(duration * fps);
       const canvas = document.createElement("canvas");
@@ -1007,8 +1009,26 @@ export default function Home() {
         ? extractOpeningQuote(script) || extractOpeningQuote(videoScenes[0]?.text || "")
         : null;
 
-      const bufferTarget = new BufferTarget();
-      const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target: bufferTarget });
+      // A 30-minute 1080p render can be several gigabytes. Keeping the whole MP4 in
+      // BufferTarget crashes the browser, so long renders stream into origin-private
+      // disk storage and are exposed as a Blob only after finalization.
+      const canStreamToDisk = duration > 5 * 60 && typeof navigator.storage?.getDirectory === "function";
+      let bufferTarget: BufferTarget | null = null;
+      let diskFileHandle: FileSystemFileHandle | null = null;
+      let outputTarget: BufferTarget | StreamTarget;
+      if (canStreamToDisk) {
+        const storageRoot = await navigator.storage.getDirectory();
+        diskFileHandle = await storageRoot.getFileHandle("cineframe-render-working.mp4", { create: true });
+        const writable = await diskFileHandle.createWritable({ keepExistingData: false });
+        outputTarget = new StreamTarget(writable as unknown as WritableStream<StreamTargetChunk>, { chunked: true, chunkSize: 8 * 1024 * 1024 });
+      } else {
+        bufferTarget = new BufferTarget();
+        outputTarget = bufferTarget;
+      }
+      const output = new Output({
+        format: new Mp4OutputFormat({ fastStart: canStreamToDisk ? "fragmented" : "in-memory" }),
+        target: outputTarget,
+      });
       const videoSource = new CanvasSource(canvas, { codec: "avc", quality: new Quality("high") });
       output.addVideoTrack(videoSource, { frameRate: fps });
 
@@ -1035,9 +1055,11 @@ export default function Home() {
         }
         const rms = Math.sqrt(squares / Math.max(1, samples));
         const masterGain = Math.max(0.5, Math.min(2.5, 0.12 / Math.max(0.0001, rms), 0.94 / Math.max(0.0001, peak)));
-        const masterRate = 48000;
+        // Gemini narration is mono, usually 24 kHz. Rendering it as 48 kHz stereo
+        // multiplied memory use by roughly four without improving spoken audio.
+        const masterRate = decodedAudio.sampleRate || 24000;
         const masterLength = Math.max(1, Math.round(duration * masterRate));
-        const offline = new OfflineAudioContext(2, masterLength, masterRate);
+        const offline = new OfflineAudioContext(1, masterLength, masterRate);
         const source = offline.createBufferSource();
         const gain = offline.createGain();
         source.buffer = decodedAudio;
@@ -1163,9 +1185,16 @@ export default function Home() {
       }
 
       await output.finalize();
-      if (!bufferTarget.buffer) throw new Error("Не удалось получить готовый MP4");
+      let renderedVideo: Blob;
+      if (diskFileHandle) {
+        const diskFile = await diskFileHandle.getFile();
+        if (!diskFile.size) throw new Error("Временный MP4 на диске оказался пустым");
+        renderedVideo = diskFile.slice(0, diskFile.size, "video/mp4");
+      } else {
+        if (!bufferTarget?.buffer) throw new Error("Не удалось получить готовый MP4");
+        renderedVideo = new Blob([bufferTarget.buffer], { type: "video/mp4" });
+      }
       if (videoUrl) URL.revokeObjectURL(videoUrl);
-      const renderedVideo = new Blob([bufferTarget.buffer], { type: "video/mp4" });
       await saveProjectBlob("video", renderedVideo)
         .then(() => setCheckpointStatus("Готовый MP4 сохранён автоматически"))
         .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `MP4 не сохранился: ${error.message}` : "MP4 не сохранился"));
@@ -1395,7 +1424,7 @@ export default function Home() {
             <label>Смена кадра<div className="staticControl">{aspect === "16:9" ? "Хук 20 сек, затем по 10" : "Каждые 10 секунд"}</div><small>Мягкий переход 0,35 сек · {frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { void invalidateGeneratedProject(); setAspect(e.target.value); }} disabled={projectLocked}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
-          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: плавная анимация +2,5° → −2,5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "1080p · 60 FPS · задумчивый хук с первой секунды · без субтитров" : "Фирменная фраза в конце · без субтитров"}</span></div>
+          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: плавная анимация +2,5° → −2,5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? `1080p · ${targetDuration <= 5 * 60 ? 60 : 30} FPS · задумчивый хук с первой секунды · без субтитров` : "Фирменная фраза в конце · без субтитров"}</span></div>
           <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Новый живописный стиль канала закреплён</b><small>Thick oil brushwork · teal shadows · crimson rain glow · soft human detail</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : scenes.length || audioFile ? "ПРОДОЛЖИТЬ СОХРАНЁННЫЙ ПРОЕКТ" : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
           <div className="autosaveStatus"><i /> <span>{checkpointStatus}</span><small>Кадры, озвучка, прогресс и MP4 сохраняются в этом браузере.</small></div>
