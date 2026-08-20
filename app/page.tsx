@@ -642,17 +642,26 @@ export default function Home() {
       void invalidateGeneratedProject();
 
       const voiceMarker = "=== ТЕКСТ ДЛЯ ОЗВУЧКИ ===";
-      const scenesMarker = "=== ПРОМПТЫ СЦЕН И ВИДЕО ===";
-      const scenesMarkerIndex = content.indexOf(scenesMarker);
+      const supportedScenesMarkers = [
+        "=== ПРОМПТЫ СЦЕН И ВИДЕО ===",
+        "=== СЦЕНЫ / НАПРАВЛЕНИЕ ===",
+      ];
+      const matchedScenesMarker = supportedScenesMarkers
+        .map((marker) => ({ marker, index: content.indexOf(marker) }))
+        .filter(({ index }) => index >= 0)
+        .sort((a, b) => a.index - b.index)[0];
+      const scenesMarkerIndex = matchedScenesMarker?.index ?? -1;
       if (scenesMarkerIndex >= 0) {
         const voicePart = content.slice(0, scenesMarkerIndex).replace(voiceMarker, "").trim();
-        const scenesPart = content.slice(scenesMarkerIndex + scenesMarker.length).trim();
+        const scenesPart = content.slice(scenesMarkerIndex + matchedScenesMarker!.marker.length).trim();
+        const voiceWords = voicePart.split(/\s+/).filter(Boolean).length;
+        const voiceSeconds = Math.max(30, Math.round((voiceWords / POPULAR_VOICE_WPM) * 60));
         setScript(voicePart);
         setDirection(scenesPart);
         const promptCount = scenesPart.split(/\r?\n/).filter((line) => /^\s*\d+\s*[.):—-]/.test(line)).length;
-        if (promptCount >= 3) applyTargetDuration(promptCount * SCENE_SECONDS);
+        applyTargetDuration(voiceSeconds);
         setScenes([]);
-        setMessage(`Загружен полный проект «${file.name}»: текст озвучки и ${promptCount} промптов сцен.`);
+        setMessage(`Загружен полный проект «${file.name}»: ${voiceWords} слов (${clock(voiceSeconds)}), промпт сцен добавлен${promptCount ? ` · ${promptCount} готовых кадров` : ""}.`);
         return;
       }
 
@@ -664,8 +673,10 @@ export default function Home() {
         setMessage(`Загружен файл «${file.name}»: найдено ${promptCount} промптов сцен.`);
       } else {
         setScript(content);
+        const voiceWords = content.split(/\s+/).filter(Boolean).length;
+        applyTargetDuration((voiceWords / POPULAR_VOICE_WPM) * 60);
         setScenes([]);
-        setMessage(`Загружен текст озвучки «${file.name}».`);
+        setMessage(`Загружен текст озвучки «${file.name}»: ${voiceWords} слов, примерно ${clock((voiceWords / POPULAR_VOICE_WPM) * 60)}.`);
       }
     };
     reader.onerror = () => setMessage("Не удалось прочитать выбранный файл.");
