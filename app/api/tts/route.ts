@@ -123,16 +123,17 @@ export async function POST(request: Request) {
 
     const voice = ALLOWED_VOICES.has(body.voice || "") ? body.voice : "Achird";
     if (!apiKey) return Response.json({ error: "Нужен Google API key" }, { status: 400 });
-    const direction = body.direction?.trim() || "Use Achird as a natural native Russian man speaking personally to one listener in a calm room. Keep a medium male register around 120–130 Hz, warm rounded timbre, relaxed consonants and normal clear conversational loudness. The voice must be fully voiced and present—never hushed, breathy or whispered. Ease naturally into the first sentence: begin relaxed and unhurried, but clear, with no hard attack or exaggerated stress on the opening words. The speaker understands and cares about each thought, while emotion stays genuine rather than performative. Let meaning create small natural changes in pitch and pace, soften imperfect endings, and give only truly important words a mild emphasis. Connect related sentences as one thought. Keep an average pace near 106–108 words per minute. Sound like a real person thinking aloud—not a narrator, presenter or motivational speaker. Avoid urgency, sternness, dramatic hooks, commanding delivery, perfect studio diction, repeated sentence melody, audiobook cadence, advertising, whispering and stretched vowels. Preserve clear Russian pronunciation.";
+    const direction = body.direction?.trim() || "Use Achird as a natural native Russian man speaking personally to one listener. Keep a medium male register around 120–130 Hz, warm rounded timbre, relaxed consonants and normal conversational loudness. Speak clearly but casually, as if explaining a thought without a prepared script. Begin calmly and naturally, without punching the first word. Let the meaning produce small spontaneous changes in pitch, pace and emphasis, while keeping the delivery emotionally present and understated. Connect related sentences smoothly and allow brief natural breathing space. Keep an average pace near 106–108 words per minute. Avoid robotic precision, identical sentence patterns, excessive seriousness, theatrical emotion, presenter cadence, whispering and stretched vowels. Preserve clear Russian pronunciation.";
     const desiredSeconds = Number.isFinite(body.desiredSeconds) ? Math.max(0, Math.min(600, Math.round(body.desiredSeconds || 0))) : 0;
     const previousSeconds = Number.isFinite(body.previousSeconds) ? Math.max(0, Math.round(body.previousSeconds || 0)) : 0;
     const timing = desiredSeconds
       ? `The complete recording should last approximately ${desiredSeconds} seconds, averaging about ${Math.max(70, Math.round(script.split(/\s+/).length / desiredSeconds * 60))} words per minute. Do not pause mechanically at every full stop. Carry related sentences forward as one continuous thought, using only brief breathing space where a real speaker would need it. Pause more clearly only when the meaning genuinely changes. Never elongate vowels or insert dramatic silence. ${previousSeconds ? `The previous attempt lasted ${previousSeconds} seconds, so ${previousSeconds < desiredSeconds ? "relax the cadence slightly without adding empty gaps" : "tighten the cadence and remove unnecessary gaps"}.` : "Let punctuation guide the rhythm without obeying it mechanically."}`
       : "Use a natural medium pace.";
-    const performanceScript = body.engine === "gemini-2.5" ? script : addExpressiveTags(script);
+    const performanceScript = body.engine?.startsWith("gemini-2.5") ? script : addExpressiveTags(script);
     const prompt = `${direction}\n\n${timing}\nBegin the first line calmly at normal conversational volume, without punching the first word or turning it into a dramatic hook. Keep the sound clear and fully voiced; do not whisper. Do not sound grave or commanding. Text in square brackets contains silent performance directions and must not be spoken. Do not add an opening quotation or a long intro unless it is already present in the supplied script. Read the Russian words below verbatim. Do not announce these instructions, do not add an introduction, and do not add or remove any spoken words.\n\nSCRIPT:\n${performanceScript}`;
-    if (body.engine === "gemini-2.5") {
-      const legacyResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:streamGenerateContent?alt=sse", {
+    if (body.engine === "gemini-2.5" || body.engine === "gemini-2.5-pro") {
+      const model = body.engine === "gemini-2.5-pro" ? "gemini-2.5-pro-preview-tts" : "gemini-2.5-flash-preview-tts";
+      const legacyResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
@@ -153,7 +154,7 @@ export async function POST(request: Request) {
         headers: {
           "content-type": legacyResponse.headers.get("content-type") || "text/event-stream",
           "x-gemini-audio-stream": "1",
-          "x-gemini-tts-model": "gemini-2.5-flash-preview-tts",
+          "x-gemini-tts-model": model,
           "cache-control": "no-store",
         },
       });

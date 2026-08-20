@@ -40,7 +40,7 @@ const VOICES = [
   { id: "Achird", label: "Achird · живой дружелюбный Gemini" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian man speaking personally to one listener in a calm room. Keep the established voice profile: medium male register around 120–130 Hz, warm rounded timbre, relaxed consonants and normal clear conversational loudness. The voice must be fully voiced and present—never hushed, breathy or whispered. Ease naturally into the first sentence: begin relaxed and unhurried, but clear, with no hard attack or exaggerated stress on the opening words. The speaker understands and cares about each thought, while emotion stays genuine rather than performative. Let meaning create small natural changes in pitch and pace, soften imperfect endings, and give only truly important words a mild emphasis. Connect related sentences as one thought. Keep an average pace near 106–108 words per minute. Sound like a real person thinking aloud—not a narrator, presenter or motivational speaker. Avoid urgency, sternness, dramatic hooks, commanding delivery, perfect studio diction, repeated sentence melody, audiobook cadence, advertising, whispering and stretched vowels. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian man speaking personally to one listener. Keep a medium male register around 120–130 Hz, warm rounded timbre, relaxed consonants and normal conversational loudness. Speak clearly but casually, as if explaining a thought without a prepared script. Begin calmly and naturally, without punching the first word. Let the meaning produce small spontaneous changes in pitch, pace and emphasis, while keeping the delivery emotionally present and understated. Connect related sentences smoothly and allow brief natural breathing space. Keep an average pace near 106–108 words per minute. Avoid robotic precision, identical sentence patterns, excessive seriousness, theatrical emotion, presenter cadence, whispering and stretched vowels. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
 const POPULAR_VOICE_WPM = 106;
 const VOICE_TEMPO = 1;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
@@ -681,7 +681,7 @@ export default function Home() {
         response = await fetch("/api/tts", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection, desiredSeconds, previousSeconds, engine: "gemini-3.1" }),
+          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection, desiredSeconds, previousSeconds, engine: "gemini-2.5-pro" }),
         });
       } catch {
         lastError = "Сетевое соединение прервалось. Автоматически пробую следующий ключ…";
@@ -796,7 +796,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `natural-achird-v23:gemini-3.1-calm-clear-entry:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `natural-achird-v24:gemini-2.5-pro-high-fidelity:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
@@ -851,7 +851,7 @@ export default function Home() {
     setVoiceError("");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
     const voicePartCount = splitVoiceText(voiceScript).length;
-    setMessage(`Gemini 3.1 создаёт живую озвучку с эмоциональной подачей: 0 из ${voicePartCount}. Не закрывай страницу.`);
+    setMessage(`Gemini 2.5 Pro создаёт озвучку повышенного качества: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
       await attachAudio(await requestLongVoiceTrack(
         list,
