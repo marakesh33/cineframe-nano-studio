@@ -40,7 +40,7 @@ const VOICES = [
   { id: "Achird", label: "Achird · живой дружелюбный Gemini" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian man speaking personally to one listener. Keep the established voice profile: medium male register around 120–130 Hz, soft controlled loudness, warm rounded timbre and relaxed consonants. The speaker must emotionally understand each thought before saying it. Create a restrained but clearly human emotional arc: open with genuine curiosity, become more personally engaged as the idea develops, give meaningful words spontaneous emphasis, let contrasts carry a hint of surprise or concern, and finish thoughts with quiet conviction or reflection. Emotion should change with the meaning instead of staying permanently neutral. Allow tiny hesitations before an important realization, occasional quicker connecting phrases, varied pitch movement and softer imperfect endings. Use natural micro-pauses of roughly 0.15–0.35 seconds inside long sentences and 0.4–0.6 seconds between complete thoughts. Keep an average pace near 108 words per minute. Sound like a real person who cares about what he is saying—not a narrator reading prepared copy. Do not overact, become melodramatic or use a deep baritone. Avoid sternness, perfect studio diction, repeated sentence melody, audiobook cadence, advertising, whispering and stretched vowels. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian man speaking quietly and personally to one listener in a calm room. Keep the established voice profile: medium male register around 120–130 Hz, warm rounded timbre and relaxed consonants. Use restrained loudness throughout, as if the listener is sitting nearby. Ease gently into the first sentence: begin soft, unhurried and slightly reflective, with no hard attack, raised volume or emphatic stress on the opening words. The speaker must understand and care about each thought, but emotion stays intimate rather than performative. Let meaning create small natural changes in pitch and pace, soften imperfect endings, and give only truly important words a mild emphasis. Connect related sentences as one thought. Keep an average pace near 106–108 words per minute. Sound like a real person thinking aloud—not a narrator, presenter or motivational speaker. Avoid urgency, sternness, dramatic hooks, commanding delivery, perfect studio diction, repeated sentence melody, audiobook cadence, advertising, whispering and stretched vowels. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
 const POPULAR_VOICE_WPM = 106;
 const VOICE_TEMPO = 1;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
@@ -187,6 +187,7 @@ async function tightenLongVoicePauses(file: File) {
     const threshold = 0.008;
     const minimumSilence = Math.round(sampleRate * 0.58);
     const keptSilence = Math.round(sampleRate * 0.42);
+    const outputGain = 0.82;
     const cuts: Array<[number, number]> = [];
     let silentStart = -1;
     for (let sample = 0; sample <= buffer.length; sample++) {
@@ -205,7 +206,6 @@ async function tightenLongVoicePauses(file: File) {
         silentStart = -1;
       }
     }
-    if (!cuts.length) return file;
     const removedSamples = cuts.reduce((total, [start, end]) => total + end - start, 0);
     const pcm = new Uint8Array((buffer.length - removedSamples) * 2);
     const view = new DataView(pcm.buffer);
@@ -217,7 +217,7 @@ async function tightenLongVoicePauses(file: File) {
       if (cut && sample >= cut[1]) cutIndex++;
       let value = 0;
       for (let channel = 0; channel < buffer.numberOfChannels; channel++) value += buffer.getChannelData(channel)[sample] || 0;
-      value = Math.max(-1, Math.min(1, value / Math.max(1, buffer.numberOfChannels)));
+      value = Math.max(-1, Math.min(1, value / Math.max(1, buffer.numberOfChannels) * outputGain));
       view.setInt16(outputSample * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
       outputSample++;
     }
@@ -796,7 +796,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `natural-achird-v21:gemini-3.1-tight-natural-pauses:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `natural-achird-v22:gemini-3.1-calm-soft-entry:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
