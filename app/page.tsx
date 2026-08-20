@@ -40,7 +40,7 @@ const VOICES = [
   { id: "Charon", label: "Charon · естественный мужской Gemini" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Use Charon as a native Russian man speaking privately to one listener, not recording a voice-over. Sound thoughtful, relaxed and present. Keep the warm chest tone, but remove polished announcer delivery: vary sentence rhythm slightly, let emphasis follow meaning, soften some unstressed syllables and sentence endings, and allow tiny natural breaths between thoughts. Do not give every phrase the same melody or weight. The opening should feel spontaneous and quietly confident, not performed. Keep an average pace near 108 words per minute without metronomic timing. Avoid audiobook cadence, motivational advertising, theatrical gravity, exaggerated diction, artificial rasp, whispering, stretched vowels, deliberate filler words and dramatic pauses. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `Use Charon as a native Russian man speaking warmly to one listener in an ordinary conversation, not recording a voice-over. Sound approachable, calm and genuinely interested, with a subtle smile in the voice. Keep the register medium and light; do not push the voice down into a dark baritone. The first sentence must begin gently and naturally, with curious inviting energy rather than authority, warning or drama. Vary sentence rhythm slightly, let emphasis follow meaning, soften unstressed syllables and endings, and allow tiny natural breaths between thoughts. Do not give every phrase the same melody. Keep an average pace near 110 words per minute without metronomic timing. Avoid seriousness, sternness, melancholy, audiobook cadence, motivational advertising, theatrical gravity, exaggerated diction, artificial rasp, whispering, stretched vowels and dramatic pauses. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
 const POPULAR_VOICE_WPM = 106;
 const VOICE_TEMPO = 1;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
@@ -748,7 +748,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `natural-charon-v15:gemini-2.5-human-rhythm:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `natural-charon-v16:gemini-2.5-warm-light-opening:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
