@@ -32,8 +32,6 @@ const DEFAULT_STYLE = `cinematic oil-painting style matching the supplied channe
 
 const STYLE_REFERENCE_PATHS = [
   "/style-references/psychology-style-user-target.png",
-  "/style-references/psychology-style-old-soft.jpg",
-  "/style-references/psychology-style-01-clean.jpg",
 ];
 
 const VOICES = [
