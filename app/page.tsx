@@ -40,20 +40,13 @@ const QWEN_LOCAL_PROFILE_ID = "6c7a7827-0001-461e-a50e-5703d42c0b54";
 const QWEN_REFERENCE_FILE = "/wealth-simple-voice-reference-clean.wav";
 const QWEN_EMBEDDING_STORAGE_KEY = "cineframe_fal_qwen_embedding_v1";
 const QWEN_REQUEST_CHARS = 650;
-const VOICE_REVISION = 6;
+const VOICE_REVISION = 7;
 const QWEN_REFERENCE_TEXT = `Начнем с правды, которую мало кто хочет слышать — разбогатеть несложно.
 Людям нравится думать иначе. Они рассуждают об этом так, будто существует тайная формула, спрятанная в древних трактатах, или доступная лишь избранным.
 Но реальность гораздо проще.`;
 
 const VOICES = [
-  { id: QWEN_LOCAL_CLONE_ID, label: "Точный клон образца · бесплатно на Mac" },
-  { id: QWEN_CLOUD_CLONE_ID, label: "Точный клон образца · Fal.ai (платно)" },
-  { id: "Algieba", label: "Algieba · мягкий живой мужской (новый)" },
-  { id: "Charon", label: "Charon · спокойный информативный" },
-  { id: "Gacrux", label: "Gacrux · зрелый и мягкий" },
-  { id: "Schedar", label: "Schedar · ровный и естественный" },
-  { id: "Achird", label: "Achird · дружелюбный (текущий старый)" },
-  { id: "Fenrir", label: "Fenrir · энергичный" },
+  { id: "Algieba", label: "Основной голос · мягкий живой мужской Gemini" },
 ];
 
 function isQwenCloneVoice(voiceId: string) {
@@ -71,8 +64,8 @@ Speak natural contemporary Russian. Let meaning control rhythm: move easily thro
 
 Never sound like an announcer, trailer narrator, meditation app, audiobook caricature or synthetic assistant. No fixed cadence, no metronomic pauses, no identical sentence endings, no grave authority, no theatrical drama, no whisper, no stretched vowels and no audible performance tags. Read the supplied Russian script verbatim without adding, removing or paraphrasing words.`;
 const POPULAR_VOICE_WPM = 129;
-const VOICE_TEMPO = 0.9;
-const VOICE_PREVIEW_TEXT = "Иногда… одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
+const VOICE_TEMPO = 1;
+const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
 const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
 const SCENE_SECONDS = 10;
 const LONG_OPENING_HOOK_SECONDS = 20;
@@ -467,7 +460,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [isGeneratingVoicePreview, setIsGeneratingVoicePreview] = useState(false);
-  const [voice, setVoice] = useState(QWEN_LOCAL_CLONE_ID);
+  const [voice, setVoice] = useState("Algieba");
   const [voiceDirection, setVoiceDirection] = useState(DEFAULT_VOICE_DIRECTION);
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -516,13 +509,13 @@ export default function Home() {
         setQuality(checkpoint.quality === "1K" ? "2K" : checkpoint.quality || "2K");
         setAspect(checkpoint.aspect);
         const restoredAudioSource = checkpoint.audioSource || (checkpoint.audioName.startsWith("gemini-") ? "generated" : "uploaded");
-        const restoredVoice = QWEN_LOCAL_CLONE_ID;
+        const restoredVoice = "Algieba";
         const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && (
-          checkpoint.voice !== QWEN_LOCAL_CLONE_ID
+          checkpoint.voice !== "Algieba"
           || (checkpoint.voiceRevision || 0) < VOICE_REVISION
         );
         setVoice(restoredVoice);
-        setVoiceDirection(restoredVoice === QWEN_CLOUD_CLONE_ID || restoredVoice === QWEN_LOCAL_CLONE_ID || restoredVoice === "Algieba" ? DEFAULT_VOICE_DIRECTION : checkpoint.voiceDirection || DEFAULT_VOICE_DIRECTION.replace(/\bAlgieba\b/g, restoredVoice));
+        setVoiceDirection(DEFAULT_VOICE_DIRECTION);
         setScenes(savedScenes as Scene[]);
         setSelectedId(savedScenes[0]?.id || null);
         setAudioDuration(legacyVoiceNeedsRefresh ? 0 : checkpoint.audioDuration);
@@ -1687,7 +1680,7 @@ export default function Home() {
         <div className="quickStep">
           <div className="quickTitle"><b>2</b><div><h2>Озвучка</h2><p>Выбери голос и нажми большую кнопку. Он прочитает текст сверху.</p></div></div>
           <div className="simpleVoiceRow">
-            <label>Голос<select value={voice} onChange={(e) => { void selectNarrator(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><small>{voice === QWEN_LOCAL_CLONE_ID ? "Тот же Qwen 1.7B и голос из популярного ролика · без оплаты, Voicebox должен быть открыт" : voice === QWEN_CLOUD_CLONE_ID ? "Тот же голос в облаке · Fal.ai списывает деньги за символы" : "Облачный голос Gemini"}</small></label>
+            <label>Голос<select value={voice} onChange={(e) => { void selectNarrator(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><small>Gemini 2.5 Pro · спокойная человеческая подача без глубокого дикторского тона</small></label>
             {voice === QWEN_CLOUD_CLONE_ID && <label>Fal.ai API key<input type="password" value={falKey} onChange={(e) => { const value = e.target.value.trim(); setFalKey(value); localStorage.setItem("cineframe_fal_key", value); }} placeholder="Вставь ключ Fal.ai" autoComplete="off" disabled={projectLocked} /><small>Хранится только в этом браузере и отправляется через защищённый маршрут сайта.</small></label>}
             <button className="previewButton" onClick={previewVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoicePreview ? "Создаю пример…" : "▶ Пример голоса"}</button>
             <button className="createVoiceButton" onClick={generateVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoice ? "Озвучиваю текст…" : "Создать озвучку текста"}</button>
