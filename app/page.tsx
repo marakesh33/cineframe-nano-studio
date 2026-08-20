@@ -45,6 +45,7 @@ const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
 const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
 const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
 const SCENE_SECONDS = 10;
+const LONG_OPENING_HOOK_SECONDS = 20;
 const CROSSFADE_SECONDS = 0.35;
 
 type StyleReference = { data: string; mime_type: string };
@@ -313,15 +314,17 @@ function cleanSceneDescription(value: string) {
 }
 
 function splitIntoScenes(text: string, count: number, duration: number, style: string, direction: string, aspect: string, openingSeconds = 0) {
-  void openingSeconds;
   const words = text.trim().split(/\s+/).filter(Boolean);
   const actualCount = Math.max(1, count);
+  const openingDuration = Math.min(duration, Math.max(0, openingSeconds));
   return Array.from({ length: actualCount }, (_, index): Scene => {
-    const from = Math.floor((index * words.length) / actualCount);
-    const to = Math.floor(((index + 1) * words.length) / actualCount);
+    const start = openingDuration > 0
+      ? (index === 0 ? 0 : openingDuration + (index - 1) * SCENE_SECONDS)
+      : index * SCENE_SECONDS;
+    const end = Math.min(duration, index === 0 && openingDuration > 0 ? openingDuration : start + SCENE_SECONDS);
+    const from = Math.floor((start / Math.max(1, duration)) * words.length);
+    const to = Math.floor((end / Math.max(1, duration)) * words.length);
     const fragment = words.slice(from, to).join(" ") || words[index % Math.max(1, words.length)] || direction || "Визуальная сцена";
-    const start = index * SCENE_SECONDS;
-    const end = Math.min(duration, start + SCENE_SECONDS);
     const describedScene = cleanSceneDescription(shotDescription(direction, index, fragment));
     const scenePrompt = index === 0
       ? `OPENING HOOK FRAME — make this image noticeably more thoughtful and psychologically intriguing than the remaining sequence. Show one main person caught in a quiet moment of realization just before an important decision: pensive indirect gaze, restrained tension in the face and hands, expressive silhouette, meaningful negative space and one unanswered visual question. Avoid a generic action collage, a smiling presenter or a busy crowd. Directly connect the emotion and setting to the opening hook. ${describedScene}`
@@ -352,7 +355,7 @@ export default function Home() {
   const [durationMinutesInput, setDurationMinutesInput] = useState("1");
   const [quality, setQuality] = useState("2K");
   const [aspect, setAspect] = useState("16:9");
-  const openingSeconds = 0;
+  const openingSeconds = aspect === "16:9" ? LONG_OPENING_HOOK_SECONDS : 0;
   const frameCount = frameCountForDuration(targetDuration, openingSeconds);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -1242,15 +1245,15 @@ export default function Home() {
         setTargetDuration(Math.round(duration));
         setDurationMinutesInput(String(Number((duration / 60).toFixed(2))));
       }
-      const planOpeningSeconds = 0;
+      const planOpeningSeconds = aspect === "16:9" ? LONG_OPENING_HOOK_SECONDS : 0;
       const planFrameCount = frameCountForDuration(duration, planOpeningSeconds);
       setPipelineProgress(20);
       setPipelineStage("frames");
       setPipelineLabel(`Создаю ${planFrameCount} кадров в закреплённом стиле канала…`);
       const reusablePlan = scenes.length === planFrameCount
         && Math.abs((scenes.at(-1)?.end || 0) - duration) < 1
-        && (!hasOpeningQuote || Math.abs((scenes[0]?.end || 0) - planOpeningSeconds) < 0.05)
-        && scenes.slice(hasOpeningQuote ? 1 : 0, -1).every((scene) => Math.abs(scene.end - scene.start - SCENE_SECONDS) < 0.05)
+        && (planOpeningSeconds <= 0 || Math.abs((scenes[0]?.end || 0) - planOpeningSeconds) < 0.05)
+        && scenes.slice(planOpeningSeconds > 0 ? 1 : 0, -1).every((scene) => Math.abs(scene.end - scene.start - SCENE_SECONDS) < 0.05)
         && scenes.every((scene, index) => scene.id === index + 1);
       const plan = reusablePlan ? scenes : splitIntoScenes(script, planFrameCount, duration, style, direction, aspect, planOpeningSeconds);
       setScenes(plan);
@@ -1350,7 +1353,7 @@ export default function Home() {
           <textarea className="mainScript" value={script} onChange={(e) => { void invalidateGeneratedProject(); setScript(e.target.value); }} placeholder="Вставь сюда полный текст ролика…" autoFocus disabled={projectLocked} />
           <div className="scriptMeta"><span>{wordCount} слов</span><span>План: {clock(estimatedDuration)}</span></div>
           <div className="quoteHint">Начинай сразу с сильного хука: конфликт, неприятная правда или обещание результата. Отдельной цитаты и долгой заставки не будет.</div>
-          <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { void invalidateGeneratedProject(); setDirection(e.target.value); }} placeholder={"Напиши сцены отдельными строками:\n1. A thoughtful man standing in a vast library...\n2. The same man studying several documents...\n3. ..."} disabled={projectLocked} /><small>Каждая пронумерованная строка — отдельный кадр по 10 секунд. Начинай сценарий сразу с сильного хука, без отдельной цитаты. Нужно примерно {frameCount} строк. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
+          <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { void invalidateGeneratedProject(); setDirection(e.target.value); }} placeholder={"Напиши сцены отдельными строками:\n1. A thoughtful man standing in a vast library...\n2. The same man studying several documents...\n3. ..."} disabled={projectLocked} /><small>{aspect === "16:9" ? "Первый кадр — отдельный сильный хук на 20 секунд;" : "Каждый кадр — 10 секунд;"} затем кадры по 10 секунд. Без отдельной цитаты. Нужно примерно {frameCount} строк. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
         </div>
 
         <div className="quickDivider" />
@@ -1375,7 +1378,7 @@ export default function Home() {
           <div className="quickTitle"><b>3</b><div><h2>Параметры видео</h2><p>Только три главные настройки.</p></div></div>
           <div className="bigControls">
             <label>Длительность, минут<input type="text" inputMode="decimal" value={durationMinutesInput} onChange={(e) => changeDurationMinutes(e.target.value)} onBlur={() => { const minutes = Number(durationMinutesInput.replace(",", ".")); if (!Number.isFinite(minutes) || minutes < 0.5) applyTargetDuration(targetDuration); }} placeholder="Например, 45" disabled={projectLocked} /><small>{audioDuration ? `Озвучка ${clock(audioDuration)} · видео ${clock(targetDuration)}` : "Можно написать 45, 60, 90… без лимита"}</small></label>
-            <label>Смена кадра<div className="staticControl">Каждые 10 секунд</div><small>Мягкий переход 0,35 сек · {frameCount} сцен на {clock(targetDuration)}</small></label>
+            <label>Смена кадра<div className="staticControl">{aspect === "16:9" ? "Хук 20 сек, затем по 10" : "Каждые 10 секунд"}</div><small>Мягкий переход 0,35 сек · {frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { void invalidateGeneratedProject(); setAspect(e.target.value); }} disabled={projectLocked}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
           <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: плавная анимация +2,5° → −2,5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "1080p · 60 FPS · задумчивый хук с первой секунды · без субтитров" : "Фирменная фраза в конце · без субтитров"}</span></div>
