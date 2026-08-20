@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from "mediabunny";
+import { SimpleFilter, SoundTouch, WebAudioBufferSource } from "soundtouchjs";
 import { addProjectToCapCut } from "./capcut-export";
 import {
   clearGeneratedProjectMedia,
@@ -27,23 +28,22 @@ type Scene = {
 
 type PipelineStage = "idle" | "voice" | "frames" | "render" | "done" | "error";
 
-const DEFAULT_STYLE = `old soft cinematic oil-painting style, deliberately painterly and slightly dreamy, broad loose brushstrokes, softened edges and facial details, gentle optical blur, low microcontrast, hazy bloom and smoky atmosphere, lifted deep teal shadows with clearly readable midtone detail, glowing crimson-red and warm amber practical lights, expressive human silhouettes and readable emotions, subtle analog film grain and vintage compression texture, moderately bright night exposure matching the older channel frames, about 15–20 percent brighter than a dark noir frame, no crushed blacks, cinematic 16:9 widescreen composition, no sharp modern digital detail, no glossy CGI, no hyperreal skin, no crisp vector-like illustration, no text, no subtitles, no logo, no watermark`;
+const DEFAULT_STYLE = `cinematic oil-painting style matching the supplied channel reference, unmistakably hand-painted rather than photographic, dense broad visible brushstrokes and soft impasto texture across the entire frame, gently simplified faces and objects, softened contours, low microcontrast, smoky atmospheric depth and restrained analog grain, dark teal and petrol-blue interiors with readable shadow detail, vivid crimson-red rain reflections and warm amber practical light used as controlled accents, contemplative psychological mood, lonely thoughtful human figures shown naturally from the side or three-quarter view, dark but never underexposed, cinematic 16:9 widescreen composition, no sharp modern digital detail, no glossy CGI, no hyperreal skin, no clean vector edges, no neon cyberpunk look, no text, no subtitles, no logo, no watermark`;
 
 const STYLE_REFERENCE_PATHS = [
-  "/style-references/psychology-style-01-clean.jpg",
-  "/style-references/psychology-style-02-clean.jpg",
+  "/style-references/psychology-style-user-target.png",
   "/style-references/psychology-style-old-soft.jpg",
+  "/style-references/psychology-style-01-clean.jpg",
 ];
 
 const VOICES = [
-  { id: "Gacrux", label: "Gacrux · голос хитов · 111 слов/мин" },
-  { id: "Charon", label: "Charon · спокойный рассказчик" },
-  { id: "Schedar", label: "Schedar · ровный документальный" },
-  { id: "Fenrir", label: "Fenrir · уверенный и живой" },
+  { id: "Gacrux", label: "Голос «Богатство — это просто» · Gemini Gacrux" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Match the narrator from the reference video «Богатство — это просто. Но жестоко» as closely as possible. Use the Gacrux voice as a native Russian male narrator, 40–55 years old: deep warm mature baritone, calm authority, intelligent and emotionally restrained. Hold a continuous measured cadence of 108–114 words per minute, targeting exactly 111. Use short natural sentence pauses of about 0.25–0.45 seconds and paragraph pauses no longer than 0.7 seconds. Never stretch vowels, slow down meditatively or insert dramatic silence. The first sentence is a firm, clear hook; contrasts receive subtle confident emphasis. Avoid advertising enthusiasm, theatrical acting, whispering, singing, exaggerated emotion and robotic rhythm. Read the supplied script verbatim without adding or removing words.`;
-const POPULAR_VOICE_WPM = 111;
+const DEFAULT_VOICE_DIRECTION = `Use Gacrux as a native Russian male narrator, approximately 35–50 years old, with the same overall character as the supplied Qwen reference but cleaner and more natural: a deep warm chest baritone, slightly textured and faintly husky, close-microphone presence, calm intelligence, restrained confidence and a serious psychological-documentary mood. Pronounce every Russian word and stress correctly, keep consonants clear without sounding over-articulated, and preserve subtle human breaths and tiny variations in emphasis. The voice must sound continuous and human: no metallic resonance, digital warble, doubled syllables, broken words, missing endings, unnatural stress, sudden pitch jumps or robotic rhythm. Hold a measured cadence of 108–114 words per minute before the final 0.8 tempo treatment. Use short sentence pauses of about 0.25–0.45 seconds and paragraph pauses no longer than 0.7 seconds. The first sentence is a firm intimate hook; contrasts receive subtle confident emphasis. Avoid advertising enthusiasm, theatrical acting, whispering, singing, exaggerated emotion, stretched vowels and dramatic silence. Read the supplied script verbatim without adding or removing words.`;
+const POPULAR_VOICE_WPM = 106;
+const VOICE_TEMPO = 0.8;
+const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
 const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
 const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
 const SCENE_SECONDS = 10;
@@ -142,6 +142,43 @@ async function readVoiceResponse(response: Response) {
   return new Blob([makeWav(parts.map((part) => base64Bytes(part.data)), sampleRate)], { type: "audio/wav" });
 }
 
+async function slowVoiceFile(file: File, tempo = VOICE_TEMPO) {
+  const audioContext = new AudioContext({ sampleRate: 24000 });
+  try {
+    const buffer = await audioContext.decodeAudioData(await file.arrayBuffer());
+    const soundTouch = new SoundTouch(buffer.sampleRate);
+    soundTouch.tempo = tempo;
+    soundTouch.pitch = 1;
+    soundTouch.rate = 1;
+    const filter = new SimpleFilter(new WebAudioBufferSource(buffer), soundTouch);
+    const blockFrames = 8192;
+    const maximumFrames = Math.ceil(buffer.length / tempo + buffer.sampleRate * 3);
+    const blocks: Float32Array[] = [];
+    let totalFrames = 0;
+    while (totalFrames < maximumFrames) {
+      const block = new Float32Array(blockFrames * 2);
+      const extracted = filter.extract(block, blockFrames);
+      if (extracted <= 0) break;
+      blocks.push(block.slice(0, extracted * 2));
+      totalFrames += extracted;
+    }
+    if (!totalFrames) return file;
+    const pcm = new Uint8Array(totalFrames * 2);
+    const view = new DataView(pcm.buffer);
+    let outputFrame = 0;
+    for (const block of blocks) {
+      for (let frame = 0; frame < block.length / 2; frame++) {
+        const value = Math.max(-1, Math.min(1, ((block[frame * 2] || 0) + (block[frame * 2 + 1] || 0)) / 2));
+        view.setInt16(outputFrame * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+        outputFrame++;
+      }
+    }
+    return new File([makeWav([pcm], buffer.sampleRate)], file.name.replace(/\.wav$/i, "-slower.wav"), { type: "audio/wav" });
+  } finally {
+    await audioContext.close();
+  }
+}
+
 function clock(seconds: number) {
   const value = Math.max(0, Math.round(seconds));
   return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
@@ -180,7 +217,7 @@ function voiceTextForScript(text: string, includeShortsOutro = false) {
   return `${voiceText.trim()}\n\n${SHORTS_OUTRO}`;
 }
 
-function splitVoiceText(text: string, maxChars = 350) {
+function splitVoiceText(text: string, maxChars = 220) {
   const paragraphs = text.trim().split(/\n+/).map((part) => part.trim()).filter(Boolean);
   const chunks: string[] = [];
   let current = "";
@@ -596,7 +633,7 @@ export default function Home() {
         response = await fetch("/api/tts", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection, desiredSeconds, previousSeconds }),
+          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection, desiredSeconds, previousSeconds, engine: "gemini-2.5" }),
         });
       } catch {
         lastError = "Сетевое соединение прервалось. Автоматически пробую следующий ключ…";
@@ -605,8 +642,9 @@ export default function Home() {
       if (response.ok) {
         try {
           const blob = await readVoiceResponse(response);
-          if (!blob.size) throw new Error("Gemini вернула пустую аудиодорожку");
-          return new File([blob], `gemini-${voice.toLowerCase()}.wav`, { type: blob.type || "audio/wav" });
+          if (!blob.size) throw new Error("Сервис вернул пустую аудиодорожку");
+          const rawFile = new File([blob], `gemini-${voice.toLowerCase()}.wav`, { type: blob.type || "audio/wav" });
+          return slowVoiceFile(rawFile);
         } catch (error) {
           lastError = error instanceof Error ? error.message : "Gemini не вернула аудиодорожку";
           continue;
@@ -625,11 +663,13 @@ export default function Home() {
     try {
       const buffers = await Promise.all(files.map((file) => file.arrayBuffer().then((data) => audioContext.decodeAudioData(data))));
       const sampleRate = buffers[0]?.sampleRate || 24000;
-      const totalSamples = buffers.reduce((total, buffer) => total + buffer.length, 0);
+      const pauseSamples = Math.round(sampleRate * VOICE_CHUNK_PAUSE_SECONDS);
+      const totalSamples = buffers.reduce((total, buffer) => total + buffer.length, 0) + pauseSamples * Math.max(0, buffers.length - 1);
       const pcm = new Uint8Array(totalSamples * 2);
       const view = new DataView(pcm.buffer);
       let offset = 0;
-      for (const buffer of buffers) {
+      for (let bufferIndex = 0; bufferIndex < buffers.length; bufferIndex++) {
+        const buffer = buffers[bufferIndex];
         for (let sample = 0; sample < buffer.length; sample++) {
           let value = 0;
           for (let channel = 0; channel < buffer.numberOfChannels; channel++) value += buffer.getChannelData(channel)[sample] || 0;
@@ -637,6 +677,7 @@ export default function Home() {
           view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
           offset += 2;
         }
+        if (bufferIndex < buffers.length - 1) offset += pauseSamples * 2;
       }
       return new File([makeWav([pcm], sampleRate)], `gemini-${voice.toLowerCase()}-full.wav`, { type: "audio/wav" });
     } finally {
@@ -707,7 +748,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `wealth-simple-voice-v2:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `wealth-simple-voice-v11:gemini-2.5-tempo-0.8:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
@@ -729,7 +770,7 @@ export default function Home() {
       const requestedSeconds = chunkSeconds;
       let part = await requestVoiceTrack(list, chunks[index], requestedSeconds);
       let partDuration = await measureAudio(part);
-      if (partDuration < chunkSeconds * 0.9 || partDuration > chunkSeconds * 1.12) {
+      if (voice !== "Gacrux" && (partDuration < chunkSeconds * 0.9 || partDuration > chunkSeconds * 1.12)) {
         const retry = await requestVoiceTrack(list, chunks[index], requestedSeconds, partDuration);
         const retryDuration = await measureAudio(retry);
         if (Math.abs(retryDuration - chunkSeconds) < Math.abs(partDuration - chunkSeconds)) {
@@ -762,7 +803,7 @@ export default function Home() {
     setVoiceError("");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
     const voicePartCount = splitVoiceText(voiceScript).length;
-    setMessage(`Gemini создаёт озвучку частями: 0 из ${voicePartCount}. Не закрывай страницу.`);
+    setMessage(`Gemini создаёт озвучку в более спокойном темпе: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
       await attachAudio(await requestLongVoiceTrack(
         list,
@@ -782,21 +823,16 @@ export default function Home() {
 
   async function previewVoice() {
     const list = keyList();
-    if (voice !== "Gacrux" && !list.length) { setShowKeys(true); return; }
+    if (!list.length) { setShowKeys(true); return; }
     setIsGeneratingVoicePreview(true);
     setVoiceError("");
-    setMessage(voice === "Gacrux" ? "Открываю точный фрагмент голоса из самого популярного ролика…" : "Создаю короткий пример выбранного голоса…");
+    setMessage("Gemini создаёт новый пример в более спокойном темпе…");
     try {
-      const blob = voice === "Gacrux"
-        ? await fetch("/wealth-simple-voice-reference.wav", { cache: "force-cache" }).then((response) => {
-          if (!response.ok) throw new Error("Не загрузился эталон голоса");
-          return response.blob();
-        })
-        : (await requestVoiceTrack(list, VOICE_PREVIEW_TEXT, 8)).slice();
+      const blob = (await requestVoiceTrack(list, VOICE_PREVIEW_TEXT, 9)).slice();
       if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
       const url = URL.createObjectURL(blob);
       setVoicePreviewUrl(url);
-      setMessage(voice === "Gacrux" ? "Это точный фрагмент голоса из «Богатство — это просто. Но жестоко»." : "Пример готов. Если воспроизведение не началось само, нажми ▶ в плеере.");
+      setMessage("Новый пример Gemini Gacrux готов. Если он не запустился сам, нажми ▶.");
       setTimeout(() => voicePreviewRef.current?.play().catch(() => undefined), 0);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Пример голоса не создался";
@@ -1297,7 +1333,7 @@ export default function Home() {
             <label>Формат<select value={aspect} onChange={(e) => { void invalidateGeneratedProject(); setAspect(e.target.value); }} disabled={projectLocked}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
           <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: плавная анимация +2,5° → −2,5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? "1080p · 60 FPS · задумчивый хук с первой секунды · без субтитров" : "Фирменная фраза в конце · без субтитров"}</span></div>
-          <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Старый мягкий стиль канала закреплён</b><small>Soft oil painting · broad brushstrokes · red & teal haze · analog grain</small></div></details>
+          <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Новый живописный стиль канала закреплён</b><small>Thick oil brushwork · teal shadows · crimson rain glow · soft human detail</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : scenes.length || audioFile ? "ПРОДОЛЖИТЬ СОХРАНЁННЫЙ ПРОЕКТ" : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
           <div className="autosaveStatus"><i /> <span>{checkpointStatus}</span><small>Кадры, озвучка, прогресс и MP4 сохраняются в этом браузере.</small></div>
           <div className={`pipelinePanel ${pipelineStage}`} aria-live="polite">

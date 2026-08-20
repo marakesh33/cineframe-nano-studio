@@ -114,12 +114,12 @@ export async function POST(request: Request) {
     };
     const apiKey = body.apiKey?.trim();
     const script = body.text?.trim();
-    if (!apiKey) return Response.json({ error: "Нужен Google API key" }, { status: 400 });
     if (!script) return Response.json({ error: "Сценарий пуст" }, { status: 400 });
     if (script.length > 12000) return Response.json({ error: "Для теста вставь текст до 12 000 символов" }, { status: 400 });
 
     const voice = ALLOWED_VOICES.has(body.voice || "") ? body.voice : "Gacrux";
-    const direction = body.direction?.trim() || "Match the narrator from the reference video «Богатство — это просто. Но жестоко» as closely as possible. Use the Gacrux voice as a native Russian male narrator, 40–55 years old: deep warm mature baritone, calm authority, intelligent and emotionally restrained. Maintain 108–114 words per minute, targeting exactly 111. Use only short natural sentence pauses and never add dramatic silence, slow meditative delivery or elongated vowels. Give the first sentence firm confident hook emphasis. Avoid advertising enthusiasm, theatrical acting, whispering, singing, exaggerated emotion and robotic rhythm.";
+    if (!apiKey) return Response.json({ error: "Нужен Google API key" }, { status: 400 });
+    const direction = body.direction?.trim() || "Use Gacrux as a native Russian male narrator, approximately 35–50 years old, with the same overall character as the supplied Qwen reference but cleaner and more natural: a deep warm chest baritone, slightly textured and faintly husky, close-microphone presence, calm intelligence, restrained confidence and a serious psychological-documentary mood. Pronounce every Russian word and stress correctly, keep consonants clear without sounding over-articulated, and preserve subtle human breaths and tiny variations in emphasis. Never produce metallic resonance, digital warble, doubled syllables, broken words, missing endings, unnatural stress, sudden pitch jumps or robotic rhythm. Maintain 108–114 words per minute before final tempo treatment, with short natural pauses and no dramatic silence or stretched vowels. Give the first sentence firm intimate hook emphasis. Avoid advertising enthusiasm, theatrical acting, whispering, singing and exaggerated emotion.";
     const desiredSeconds = Number.isFinite(body.desiredSeconds) ? Math.max(0, Math.min(600, Math.round(body.desiredSeconds || 0))) : 0;
     const previousSeconds = Number.isFinite(body.previousSeconds) ? Math.max(0, Math.round(body.previousSeconds || 0)) : 0;
     const timing = desiredSeconds
