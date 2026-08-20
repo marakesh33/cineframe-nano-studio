@@ -40,8 +40,8 @@ const VOICES = [
   { id: "Achird", label: "Achird · живой дружелюбный Gemini" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian man speaking personally to one listener. Keep a medium male register around 120–130 Hz, warm rounded timbre, relaxed consonants and normal conversational loudness. Speak clearly but casually, as if explaining a thought without a prepared script. Begin calmly and naturally, without punching the first word. Let the meaning produce small spontaneous changes in pitch, pace and emphasis, while keeping the delivery emotionally present and understated. Connect related sentences smoothly and allow brief natural breathing space. Keep an average pace near 106–108 words per minute. Avoid robotic precision, identical sentence patterns, excessive seriousness, theatrical emotion, presenter cadence, whispering and stretched vowels. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
-const POPULAR_VOICE_WPM = 106;
+const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian male narrator matching the shared delivery profile of the channel's most successful videos. Keep a medium warm male register around 118–126 Hz, normal full speaking volume, relaxed consonants and clear but not over-polished Russian diction. Maintain a flowing pace of 126–132 words per minute, targeting 129. Speak in connected thought groups: short linking words may move faster, important words receive brief natural weight, and sentence endings soften without losing clarity. Use quick breaths and pauses around 0.18–0.35 seconds, with an occasional 0.45–0.6 second pause only when the idea genuinely changes. Begin directly and confidently but without shouting, trailer drama or a hard artificial attack. Let interest, warning and conviction appear naturally from the meaning instead of using one fixed emotion. Avoid slow meditation, robotic precision, equal spacing between words, identical sentence melodies, theatrical acting, whispering and stretched vowels. Read the supplied Russian script verbatim without adding or removing words.`;
+const POPULAR_VOICE_WPM = 129;
 const VOICE_TEMPO = 1;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
 const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
@@ -796,7 +796,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `natural-achird-v24:gemini-2.5-pro-high-fidelity:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `natural-achird-v25:gemini-2.5-pro-popular-video-profile:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
@@ -876,7 +876,7 @@ export default function Home() {
     setVoiceError("");
     setMessage("Gemini создаёт чистый пример без обработки скорости…");
     try {
-      const blob = (await requestVoiceTrack(list, VOICE_PREVIEW_TEXT, 9)).slice();
+      const blob = (await requestVoiceTrack(list, VOICE_PREVIEW_TEXT, 8)).slice();
       if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
       const url = URL.createObjectURL(blob);
       setVoicePreviewUrl(url);
