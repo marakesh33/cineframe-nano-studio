@@ -40,7 +40,8 @@ const QWEN_LOCAL_PROFILE_ID = "6c7a7827-0001-461e-a50e-5703d42c0b54";
 const QWEN_REFERENCE_FILE = "/wealth-simple-voice-reference-clean.wav";
 const QWEN_EMBEDDING_STORAGE_KEY = "cineframe_fal_qwen_embedding_v1";
 const QWEN_REQUEST_CHARS = 650;
-const VOICE_REVISION = 7;
+const GEMINI_REQUEST_CHARS = 520;
+const VOICE_REVISION = 8;
 const QWEN_REFERENCE_TEXT = `Начнем с правды, которую мало кто хочет слышать — разбогатеть несложно.
 Людям нравится думать иначе. Они рассуждают об этом так, будто существует тайная формула, спрятанная в древних трактатах, или доступная лишь избранным.
 Но реальность гораздо проще.`;
@@ -54,15 +55,15 @@ function isQwenCloneVoice(voiceId: string) {
 }
 
 const DEFAULT_VOICE_DIRECTION = `# AUDIO PROFILE
-Nikolai is a native Russian male essay narrator in his early thirties. His voice is warm, smooth and grounded, with the natural imperfections of a real person speaking from experience. He is intelligent without sounding academic, intimate without whispering, and emotionally present without acting.
+Nikolai is a native Russian man in his early thirties speaking in his own words, not performing a prepared voice-over. His voice is warm, clear and naturally medium-light — never artificially deep. He sounds intelligent, attentive and emotionally present, with small human variations rather than studio-perfect uniformity.
 
 # THE SCENE
-Nikolai is recording late in a quiet, softly lit room for one attentive listener. He understands the thought first and then says it, as if this is a genuine conversation rather than a prepared voice-over. The microphone is close, but his voice remains fully voiced, clean and comfortable.
+Nikolai is talking quietly to one interested person in a comfortable room. He understands each idea before saying it. The microphone is close, but this still feels like a genuine conversation, not narration from a booth.
 
 # DIRECTOR'S NOTES
-Speak natural contemporary Russian. Let meaning control rhythm: move easily through linking words, give important ideas subtle weight, and allow tiny thinking moments only where the thought truly turns. Keep a calm flowing pace suitable for a psychological YouTube essay. Vary sentence melody and energy gently so consecutive sentences never land in the same mechanical pattern. Begin softly and naturally, as though continuing an interesting conversation; never hit the first word. Use restrained human curiosity, recognition, concern and warmth when the text calls for them. Keep diction clear but pleasantly relaxed, with natural consonants and no artificial over-articulation. Include subtle real breathing and tiny changes of energy between thoughts. The delivery may be slightly imperfect and spontaneous: let an occasional phrase flow faster and the next important phrase settle naturally. Do not polish away every human irregularity.
+Speak natural contemporary Russian at a calm conversational pace. Let meaning control rhythm instead of punctuation. Move lightly through setup words, let an occasional simple phrase come a little faster, and slow only around a genuinely important realization. Connect related sentences as one thought; do not restart the voice after every full stop. Use short pauses inside a thought, a slightly longer pause only when the idea truly changes, and never leave identical gaps between sentences. Vary sentence melody: some endings may settle gently, others remain open and lead into the next sentence. Begin softly at normal volume, as if the conversation has already started. Keep diction clear but relaxed; do not over-articulate consonants. Use restrained curiosity, recognition, concern and warmth only where the meaning calls for them. Any breathing must be quiet and incidental, never inserted as an effect. Preserve tiny natural changes of energy and timing, including an occasional brief thinking beat before an important clause.
 
-Never sound like an announcer, trailer narrator, meditation app, audiobook caricature or synthetic assistant. No fixed cadence, no metronomic pauses, no identical sentence endings, no grave authority, no theatrical drama, no whisper, no stretched vowels and no audible performance tags. Read the supplied Russian script verbatim without adding, removing or paraphrasing words.`;
+Never sound like an announcer, trailer narrator, meditation app, audiobook actor or synthetic assistant. No fixed cadence, metronomic pauses, repeated downward endings, grave authority, theatrical emphasis, whispering, stretched vowels, exaggerated breaths or audible performance tags. Do not make every sentence equally important. Read the supplied Russian script verbatim without adding, removing or paraphrasing words.`;
 const POPULAR_VOICE_WPM = 129;
 const VOICE_TEMPO = 1;
 const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
@@ -246,8 +247,7 @@ async function tightenLongVoicePauses(file: File) {
     const buffer = await audioContext.decodeAudioData(await file.arrayBuffer());
     const sampleRate = buffer.sampleRate || 24000;
     const threshold = 0.008;
-    const minimumSilence = Math.round(sampleRate * 0.58);
-    const keptSilence = Math.round(sampleRate * 0.42);
+    const minimumSilence = Math.round(sampleRate * 0.62);
     const outputGain = 1;
     const cuts: Array<[number, number]> = [];
     let silentStart = -1;
@@ -260,6 +260,9 @@ async function tightenLongVoicePauses(file: File) {
       if (!silent && silentStart >= 0) {
         const silentLength = sample - silentStart;
         if (silentLength > minimumSilence) {
+          // Compress overlong synthetic gaps without forcing every pause to the
+          // same duration. Real speech keeps small timing differences.
+          const keptSilence = Math.round(Math.min(sampleRate * 0.62, Math.max(sampleRate * 0.34, silentLength * 0.55)));
           const excess = silentLength - keptSilence;
           const cutStart = silentStart + Math.floor(keptSilence / 2);
           cuts.push([cutStart, cutStart + excess]);
@@ -1048,7 +1051,7 @@ export default function Home() {
   ) {
     // Qwen receives coherent sentence groups. The local cache keeps every
     // finished group, so a long narration can resume after an interruption.
-    const chunks = splitVoiceText(text, isQwenCloneVoice(voice) ? QWEN_REQUEST_CHARS : 220);
+    const chunks = splitVoiceText(text, isQwenCloneVoice(voice) ? QWEN_REQUEST_CHARS : GEMINI_REQUEST_CHARS);
     const hasOpeningChunk = chunks[0]?.startsWith("«") && chunks[0].includes("»");
     let exactOpeningSeconds = 0;
     const files: File[] = [];
@@ -1059,7 +1062,7 @@ export default function Home() {
       // chunk to last at least eight seconds made valid clips (for example six words)
       // look truncated and stopped long narrations at the same chunk every time.
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 1.5, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `narrator-v32:${voice}:${VOICE_TEMPO}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `narrator-v33:${voice}:${VOICE_TEMPO}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
@@ -1117,7 +1120,7 @@ export default function Home() {
     setIsGeneratingVoice(true);
     setVoiceError("");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
-    const voicePartCount = splitVoiceText(voiceScript, isQwenCloneVoice(voice) ? QWEN_REQUEST_CHARS : 220).length;
+    const voicePartCount = splitVoiceText(voiceScript, isQwenCloneVoice(voice) ? QWEN_REQUEST_CHARS : GEMINI_REQUEST_CHARS).length;
     setMessage(voice === QWEN_LOCAL_CLONE_ID
       ? `Локальный Qwen создаёт голос бесплатно: 0 из ${voicePartCount}. Готовые части сохраняются автоматически.`
       : voice === QWEN_CLOUD_CLONE_ID
@@ -1508,7 +1511,7 @@ export default function Home() {
     setPipelineProgress(2);
     setPipelineStage("voice");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
-    setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceScript, isQwenCloneVoice(voice) ? QWEN_REQUEST_CHARS : 220).length} частей…`);
+    setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceScript, isQwenCloneVoice(voice) ? QWEN_REQUEST_CHARS : GEMINI_REQUEST_CHARS).length} частей…`);
     setVoiceError("");
     try {
       const hasOpeningQuote = false;
@@ -1532,7 +1535,7 @@ export default function Home() {
           setOpeningQuoteDuration(seconds);
         } : undefined);
         duration = await measureAudio(soundtrack);
-        if (!isQwenCloneVoice(voice) && splitVoiceText(voiceScript, 220).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
+        if (!isQwenCloneVoice(voice) && splitVoiceText(voiceScript, GEMINI_REQUEST_CHARS).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
           setPipelineLabel(`Корректирую темп озвучки: было ${clock(duration)}, нужно ${clock(targetDuration)}…`);
           soundtrack = await requestVoiceTrack(list, voiceScript, targetDuration, duration);
           duration = await measureAudio(soundtrack);
