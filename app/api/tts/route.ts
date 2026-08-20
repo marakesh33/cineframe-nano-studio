@@ -78,6 +78,17 @@ function parseEventStream(text: string) {
   return events;
 }
 
+function addExpressiveTags(script: string) {
+  const sentences = script.match(/[^.!?…]+(?:[.!?…]+|$)/g)?.map((part) => part.trim()).filter(Boolean) || [script];
+  const cues = [
+    "[curious, conversational, speaking from personal experience]",
+    "[thoughtful, emotionally present, with a small realization]",
+    "[naturally emphatic, personally engaged, not theatrical]",
+    "[reflective, warm, soften the ending]",
+  ];
+  return sentences.map((sentence, index) => `${cues[index % cues.length]} ${sentence}`).join(" ");
+}
+
 function findErrorMessage(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Record<string, unknown>;
@@ -125,7 +136,8 @@ export async function POST(request: Request) {
     const timing = desiredSeconds
       ? `The complete recording must last approximately ${desiredSeconds} seconds. Maintain about ${Math.max(70, Math.round(script.split(/\s+/).length / desiredSeconds * 60))} words per minute within a tolerance of ±3 WPM. Use short sentence pauses of 0.25–0.45 seconds and paragraph pauses no longer than 0.7 seconds. Never elongate vowels or insert dramatic silence. ${previousSeconds ? `The previous attempt lasted ${previousSeconds} seconds, so deliberately ${previousSeconds < desiredSeconds ? "reduce cadence slightly while keeping pauses short" : "increase cadence and remove every long pause"}.` : "Keep the narration continuous and confident."}`
       : "Use a natural medium pace.";
-    const prompt = `${direction}\n\n${timing}\nStart immediately with the first line as a warm conversational hook. Do not sound grave or commanding. Do not add an opening quotation or a long intro unless it is already present in the supplied script. Read the Russian script below verbatim. Do not announce these instructions, do not add an introduction, and do not add or remove any words.\n\nSCRIPT:\n${script}`;
+    const performanceScript = body.engine === "gemini-2.5" ? script : addExpressiveTags(script);
+    const prompt = `${direction}\n\n${timing}\nStart immediately with the first line as a warm conversational hook. Do not sound grave or commanding. Text in square brackets contains silent performance directions and must not be spoken. Do not add an opening quotation or a long intro unless it is already present in the supplied script. Read the Russian words below verbatim. Do not announce these instructions, do not add an introduction, and do not add or remove any spoken words.\n\nSCRIPT:\n${performanceScript}`;
     if (body.engine === "gemini-2.5") {
       const legacyResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:streamGenerateContent?alt=sse", {
         method: "POST",

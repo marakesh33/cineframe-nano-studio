@@ -633,7 +633,7 @@ export default function Home() {
         response = await fetch("/api/tts", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection, desiredSeconds, previousSeconds, engine: "gemini-2.5" }),
+          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection, desiredSeconds, previousSeconds, engine: "gemini-3.1" }),
         });
       } catch {
         lastError = "Сетевое соединение прервалось. Автоматически пробую следующий ключ…";
@@ -748,7 +748,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `natural-achird-v18:gemini-2.5-human-emotional-arc:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `natural-achird-v19:gemini-3.1-expressive-tags:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
@@ -803,7 +803,7 @@ export default function Home() {
     setVoiceError("");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
     const voicePartCount = splitVoiceText(voiceScript).length;
-    setMessage(`Gemini создаёт чистую озвучку без искусственного растягивания: 0 из ${voicePartCount}. Не закрывай страницу.`);
+    setMessage(`Gemini 3.1 создаёт живую озвучку с эмоциональной подачей: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
       await attachAudio(await requestLongVoiceTrack(
         list,
