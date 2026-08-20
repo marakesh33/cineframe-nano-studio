@@ -37,10 +37,10 @@ const STYLE_REFERENCE_PATHS = [
 ];
 
 const VOICES = [
-  { id: "Charon", label: "Charon · естественный мужской Gemini" },
+  { id: "Achird", label: "Achird · живой дружелюбный Gemini" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Use Charon as a native Russian man speaking warmly to one listener in an ordinary conversation, not recording a voice-over. Sound approachable, calm and genuinely interested, with a subtle smile in the voice. Keep the register medium and light; do not push the voice down into a dark baritone. The first sentence must begin gently and naturally, with curious inviting energy rather than authority, warning or drama. Vary sentence rhythm slightly, let emphasis follow meaning, soften unstressed syllables and endings, and allow tiny natural breaths between thoughts. Do not give every phrase the same melody. Keep an average pace near 110 words per minute without metronomic timing. Avoid seriousness, sternness, melancholy, audiobook cadence, motivational advertising, theatrical gravity, exaggerated diction, artificial rasp, whispering, stretched vowels and dramatic pauses. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian man speaking personally to one listener. Match these broad delivery traits: a medium male register around 120–130 Hz, soft controlled loudness, warm rounded timbre, relaxed consonants and an approachable thoughtful mood. Sound like a real person sharing an observation, not a narrator performing a script. Begin simply and conversationally; do not punch or darken the first words. Use meaningful micro-pauses of roughly 0.15–0.35 seconds inside long sentences and a relaxed 0.4–0.6 second pause between complete thoughts. Let pitch and pace move with the meaning, including occasional quicker connecting words and softer endings. Keep an average pace near 108 words per minute. Avoid a deep baritone, sternness, excessive seriousness, perfect studio diction, repeated sentence melody, audiobook cadence, advertising, theatrical gravity, whispering and stretched vowels. Preserve clear Russian pronunciation and read the supplied script verbatim without adding or removing words.`;
 const POPULAR_VOICE_WPM = 106;
 const VOICE_TEMPO = 1;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
@@ -316,7 +316,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [isGeneratingVoicePreview, setIsGeneratingVoicePreview] = useState(false);
-  const [voice, setVoice] = useState("Charon");
+  const [voice, setVoice] = useState("Achird");
   const [voiceDirection, setVoiceDirection] = useState(DEFAULT_VOICE_DIRECTION);
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -364,8 +364,8 @@ export default function Home() {
         setQuality(checkpoint.quality === "1K" ? "2K" : checkpoint.quality || "2K");
         setAspect(checkpoint.aspect);
         const restoredAudioSource = checkpoint.audioSource || (checkpoint.audioName.startsWith("gemini-") ? "generated" : "uploaded");
-        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && checkpoint.voice !== "Charon";
-        setVoice("Charon");
+        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && checkpoint.voice !== "Achird";
+        setVoice("Achird");
         setVoiceDirection(DEFAULT_VOICE_DIRECTION);
         setScenes(savedScenes as Scene[]);
         setSelectedId(savedScenes[0]?.id || null);
@@ -748,7 +748,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `natural-charon-v16:gemini-2.5-warm-light-opening:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `natural-achird-v17:gemini-2.5-reference-profile:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {

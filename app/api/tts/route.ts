@@ -1,4 +1,4 @@
-const ALLOWED_VOICES = new Set(["Gacrux", "Charon", "Schedar", "Fenrir"]);
+const ALLOWED_VOICES = new Set(["Gacrux", "Charon", "Achird", "Schedar", "Fenrir"]);
 
 type AudioPart = { data: string; mime: string };
 
@@ -117,9 +117,9 @@ export async function POST(request: Request) {
     if (!script) return Response.json({ error: "Сценарий пуст" }, { status: 400 });
     if (script.length > 12000) return Response.json({ error: "Для теста вставь текст до 12 000 символов" }, { status: 400 });
 
-    const voice = ALLOWED_VOICES.has(body.voice || "") ? body.voice : "Charon";
+    const voice = ALLOWED_VOICES.has(body.voice || "") ? body.voice : "Achird";
     if (!apiKey) return Response.json({ error: "Нужен Google API key" }, { status: 400 });
-    const direction = body.direction?.trim() || "Use Charon as a native Russian man speaking warmly to one listener in an ordinary conversation, not recording a voice-over. Sound approachable, calm and genuinely interested, with a subtle smile in the voice. Keep the register medium and light; do not push the voice down into a dark baritone. The first sentence must begin gently and naturally, with curious inviting energy rather than authority, warning or drama. Vary sentence rhythm slightly, let emphasis follow meaning, soften unstressed syllables and endings, and allow tiny natural breaths between thoughts. Do not give every phrase the same melody. Keep an average pace near 110 words per minute without metronomic timing. Avoid seriousness, sternness, melancholy, audiobook cadence, motivational advertising, theatrical gravity, exaggerated diction, artificial rasp, whispering, stretched vowels and dramatic pauses. Preserve clear Russian pronunciation.";
+    const direction = body.direction?.trim() || "Use Achird as a natural native Russian man speaking personally to one listener. Match these broad delivery traits: a medium male register around 120–130 Hz, soft controlled loudness, warm rounded timbre, relaxed consonants and an approachable thoughtful mood. Sound like a real person sharing an observation, not a narrator performing a script. Begin simply and conversationally; do not punch or darken the first words. Use meaningful micro-pauses of roughly 0.15–0.35 seconds inside long sentences and a relaxed 0.4–0.6 second pause between complete thoughts. Let pitch and pace move with the meaning, including occasional quicker connecting words and softer endings. Keep an average pace near 108 words per minute. Avoid a deep baritone, sternness, excessive seriousness, perfect studio diction, repeated sentence melody, audiobook cadence, advertising, theatrical gravity, whispering and stretched vowels. Preserve clear Russian pronunciation.";
     const desiredSeconds = Number.isFinite(body.desiredSeconds) ? Math.max(0, Math.min(600, Math.round(body.desiredSeconds || 0))) : 0;
     const previousSeconds = Number.isFinite(body.previousSeconds) ? Math.max(0, Math.round(body.previousSeconds || 0)) : 0;
     const timing = desiredSeconds
