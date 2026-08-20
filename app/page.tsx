@@ -34,7 +34,17 @@ const STYLE_REFERENCE_PATHS = [
   "/style-references/psychology-style-user-target.png",
 ];
 
+const QWEN_CLOUD_CLONE_ID = "qwen-cloud-youtube-clone";
+const QWEN_REFERENCE_FILE = "/wealth-simple-voice-reference-clean.wav";
+const QWEN_EMBEDDING_STORAGE_KEY = "cineframe_fal_qwen_embedding_v1";
+const QWEN_REQUEST_CHARS = 650;
+const VOICE_REVISION = 5;
+const QWEN_REFERENCE_TEXT = `Начнем с правды, которую мало кто хочет слышать — разбогатеть несложно.
+Людям нравится думать иначе. Они рассуждают об этом так, будто существует тайная формула, спрятанная в древних трактатах, или доступная лишь избранным.
+Но реальность гораздо проще.`;
+
 const VOICES = [
+  { id: QWEN_CLOUD_CLONE_ID, label: "Точный клон образца · Cloud Qwen 1.7B" },
   { id: "Algieba", label: "Algieba · мягкий живой мужской (новый)" },
   { id: "Charon", label: "Charon · спокойный информативный" },
   { id: "Gacrux", label: "Gacrux · зрелый и мягкий" },
@@ -54,8 +64,8 @@ Speak natural contemporary Russian. Let meaning control rhythm: move easily thro
 
 Never sound like an announcer, trailer narrator, meditation app, audiobook caricature or synthetic assistant. No fixed cadence, no metronomic pauses, no identical sentence endings, no grave authority, no theatrical drama, no whisper, no stretched vowels and no audible performance tags. Read the supplied Russian script verbatim without adding, removing or paraphrasing words.`;
 const POPULAR_VOICE_WPM = 129;
-const VOICE_TEMPO = 1;
-const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
+const VOICE_TEMPO = 0.9;
+const VOICE_PREVIEW_TEXT = "Иногда… одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
 const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
 const SCENE_SECONDS = 10;
 const LONG_OPENING_HOOK_SECONDS = 20;
@@ -191,6 +201,45 @@ async function slowVoiceFile(file: File, tempo = VOICE_TEMPO) {
   }
 }
 
+async function forceVoiceDuration(file: File, targetSeconds: number) {
+  const audioContext = new AudioContext({ sampleRate: 24000 });
+  try {
+    const buffer = await audioContext.decodeAudioData(await file.arrayBuffer());
+    const sampleRate = buffer.sampleRate || 24000;
+    const exactSamples = Math.max(1, Math.round(targetSeconds * sampleRate));
+    const copiedSamples = Math.min(buffer.length, exactSamples);
+    const pcm = new Uint8Array(exactSamples * 2);
+    const view = new DataView(pcm.buffer);
+    for (let sample = 0; sample < copiedSamples; sample++) {
+      let value = 0;
+      for (let channel = 0; channel < buffer.numberOfChannels; channel++) value += buffer.getChannelData(channel)[sample] || 0;
+      value = Math.max(-1, Math.min(1, value / Math.max(1, buffer.numberOfChannels)));
+      view.setInt16(sample * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+    }
+    return new File([makeWav([pcm], sampleRate)], file.name.replace(/\.wav$/i, "-exact.wav"), { type: "audio/wav" });
+  } finally {
+    await audioContext.close();
+  }
+}
+
+async function fitVoiceFileToDuration(file: File, targetSeconds: number) {
+  const audioContext = new AudioContext({ sampleRate: 24000 });
+  let currentSeconds = 0;
+  try {
+    const buffer = await audioContext.decodeAudioData(await file.arrayBuffer());
+    currentSeconds = buffer.duration;
+  } finally {
+    await audioContext.close();
+  }
+  if (!currentSeconds || !targetSeconds) return file;
+  const tempo = currentSeconds / targetSeconds;
+  if (tempo < 0.72 || tempo > 1.28) {
+    throw new Error(`Текст не помещается естественно: голос ${clock(currentSeconds)}, видео ${clock(targetSeconds)}. Сократи или дополни сценарий примерно на ${Math.round(Math.abs(1 - tempo) * 100)}%.`);
+  }
+  const stretched = Math.abs(tempo - 1) < 0.005 ? file : await slowVoiceFile(file, tempo);
+  return forceVoiceDuration(stretched, targetSeconds);
+}
+
 async function tightenLongVoicePauses(file: File) {
   const audioContext = new AudioContext({ sampleRate: 24000 });
   try {
@@ -275,6 +324,36 @@ function voiceTextForScript(text: string, includeShortsOutro = false) {
   const voiceText = text;
   if (!includeShortsOutro || voiceText.includes(SHORTS_OUTRO)) return voiceText;
   return `${voiceText.trim()}\n\n${SHORTS_OUTRO}`;
+}
+
+const RUSSIAN_VOICE_STRESSES: Array<[string, string]> = [
+  ["договоров", "догово́ров"], ["договором", "догово́ром"], ["договоры", "догово́ры"], ["договор", "догово́р"],
+  ["обеспечения", "обеспече́ния"], ["обеспечение", "обеспече́ние"], ["обеспечением", "обеспече́нием"],
+  ["намерения", "намере́ния"], ["намерение", "намере́ние"], ["намерением", "намере́нием"],
+  ["процентов", "проце́нтов"], ["проценты", "проце́нты"], ["процентами", "проце́нтами"],
+  ["разбогатеть", "разбогате́ть"], ["богатство", "бога́тство"], ["богатства", "бога́тства"],
+  ["бедность", "бе́дность"], ["бедности", "бе́дности"], ["деньгами", "де́ньгами"],
+  ["доходов", "дохо́дов"], ["доходы", "дохо́ды"], ["инвестиции", "инвести́ции"], ["инвестировать", "инвести́ровать"],
+  ["психология", "психоло́гия"], ["психологии", "психоло́гии"], ["мышление", "мышле́ние"], ["мышления", "мышле́ния"],
+  ["самооценка", "самооце́нка"], ["самооценки", "самооце́нки"], ["манипуляция", "манипуля́ция"], ["манипуляции", "манипуля́ции"],
+  ["отношения", "отноше́ния"], ["одиночество", "одино́чество"], ["зависимость", "зави́симость"], ["осознание", "осозна́ние"],
+  ["феномен", "фено́мен"], ["маркетинг", "ма́ркетинг"], ["каталог", "катало́г"], ["квартал", "кварта́л"],
+  ["звонит", "звони́т"], ["позвонит", "позвони́т"], ["начала", "начала́"], ["начался", "начался́"],
+  ["поняла", "поняла́"], ["приняла", "приняла́"], ["создала", "создала́"], ["заняла", "заняла́"],
+];
+
+function applyRussianVoiceStresses(text: string) {
+  let prepared = text.normalize("NFC");
+  for (const [plain, stressed] of RUSSIAN_VOICE_STRESSES) {
+    const pattern = new RegExp(`(^|[^А-Яа-яЁё])(${plain})(?=$|[^А-Яа-яЁё])`, "giu");
+    prepared = prepared.replace(pattern, (_full, prefix: string, matched: string) => {
+      const replacement = matched[0] === matched[0]?.toUpperCase()
+        ? stressed[0].toUpperCase() + stressed.slice(1)
+        : stressed;
+      return `${prefix}${replacement}`;
+    });
+  }
+  return prepared;
 }
 
 function splitVoiceText(text: string, maxChars = 220) {
@@ -363,6 +442,8 @@ export default function Home() {
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioSource, setAudioSource] = useState<"generated" | "uploaded">("uploaded");
   const [audioIncludesShortsOutro, setAudioIncludesShortsOutro] = useState(false);
+  const [fitVoiceToVideo, setFitVoiceToVideo] = useState(false);
+  const [referenceVideoName, setReferenceVideoName] = useState("");
   const [openingQuoteDuration, setOpeningQuoteDuration] = useState(0);
   const [targetDuration, setTargetDuration] = useState(60);
   const [durationMinutesInput, setDurationMinutesInput] = useState("1");
@@ -373,12 +454,13 @@ export default function Home() {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [keys, setKeys] = useState("");
+  const [falKey, setFalKey] = useState("");
   const [showKeys, setShowKeys] = useState(false);
   const [message, setMessage] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [isGeneratingVoicePreview, setIsGeneratingVoicePreview] = useState(false);
-  const [voice, setVoice] = useState("Algieba");
+  const [voice, setVoice] = useState(QWEN_CLOUD_CLONE_ID);
   const [voiceDirection, setVoiceDirection] = useState(DEFAULT_VOICE_DIRECTION);
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -402,6 +484,7 @@ export default function Home() {
 
   useEffect(() => {
     setKeys(localStorage.getItem("cineframe_google_keys") || "");
+    setFalKey(localStorage.getItem("cineframe_fal_key") || "");
     const savedCursor = Number(localStorage.getItem("cineframe_google_key_cursor") || "0");
     keyCursorRef.current = Number.isFinite(savedCursor) && savedCursor >= 0 ? savedCursor : 0;
   }, []);
@@ -426,16 +509,21 @@ export default function Home() {
         setQuality(checkpoint.quality === "1K" ? "2K" : checkpoint.quality || "2K");
         setAspect(checkpoint.aspect);
         const restoredAudioSource = checkpoint.audioSource || (checkpoint.audioName.startsWith("gemini-") ? "generated" : "uploaded");
-        const restoredVoice = VOICES.some((item) => item.id === checkpoint.voice) ? checkpoint.voice : "Algieba";
-        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && restoredVoice !== checkpoint.voice;
+        const restoredVoice = checkpoint.voice === QWEN_CLOUD_CLONE_ID ? checkpoint.voice : QWEN_CLOUD_CLONE_ID;
+        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && (
+          checkpoint.voice !== QWEN_CLOUD_CLONE_ID
+          || (checkpoint.voiceRevision || 0) < VOICE_REVISION
+        );
         setVoice(restoredVoice);
-        setVoiceDirection(restoredVoice === "Algieba" ? DEFAULT_VOICE_DIRECTION : checkpoint.voiceDirection || DEFAULT_VOICE_DIRECTION.replace(/\bAlgieba\b/g, restoredVoice));
+        setVoiceDirection(restoredVoice === QWEN_CLOUD_CLONE_ID || restoredVoice === "Algieba" ? DEFAULT_VOICE_DIRECTION : checkpoint.voiceDirection || DEFAULT_VOICE_DIRECTION.replace(/\bAlgieba\b/g, restoredVoice));
         setScenes(savedScenes as Scene[]);
         setSelectedId(savedScenes[0]?.id || null);
         setAudioDuration(legacyVoiceNeedsRefresh ? 0 : checkpoint.audioDuration);
         setOpeningQuoteDuration(0);
         setAudioSource(restoredAudioSource);
         setAudioIncludesShortsOutro(checkpoint.audioIncludesShortsOutro ?? false);
+        setFitVoiceToVideo(checkpoint.fitVoiceToVideo ?? false);
+        setReferenceVideoName(checkpoint.referenceVideoName || "");
         if (savedAudio && !legacyVoiceNeedsRefresh) {
           const restoredAudio = new File([savedAudio], checkpoint.audioName || "cineframe-restored-voice.wav", { type: savedAudio.type || "audio/wav" });
           setAudioFile(restoredAudio);
@@ -491,6 +579,9 @@ export default function Home() {
         openingQuoteDuration,
         audioSource,
         audioIncludesShortsOutro,
+        fitVoiceToVideo,
+        referenceVideoName,
+        voiceRevision: VOICE_REVISION,
         scenes: scenes.map(({ image: _image, ...scene }) => scene),
         pipelineStage,
         pipelineProgress,
@@ -501,7 +592,7 @@ export default function Home() {
         .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `Не сохранилось: ${error.message}` : "Не удалось сохранить проект"));
     }, 300);
     return () => window.clearTimeout(timeout);
-  }, [script, direction, style, targetDuration, durationMinutesInput, quality, aspect, voice, voiceDirection, audioName, audioDuration, openingQuoteDuration, audioSource, audioIncludesShortsOutro, scenes, pipelineStage, pipelineProgress, pipelineLabel]);
+  }, [script, direction, style, targetDuration, durationMinutesInput, quality, aspect, voice, voiceDirection, audioName, audioDuration, openingQuoteDuration, audioSource, audioIncludesShortsOutro, fitVoiceToVideo, referenceVideoName, scenes, pipelineStage, pipelineProgress, pipelineLabel]);
 
   const wordCount = useMemo(() => script.trim().split(/\s+/).filter(Boolean).length, [script]);
   const estimatedDuration = Math.max(1, targetDuration);
@@ -571,11 +662,13 @@ export default function Home() {
     probe.onloadedmetadata = () => {
       const exactDuration = probe.duration || 0;
       setAudioDuration(exactDuration);
-      if (options.source === "generated" && exactDuration) {
+      if (options.source === "generated" && exactDuration && !fitVoiceToVideo) {
         setTargetDuration(Math.max(30, Math.round(exactDuration)));
         setDurationMinutesInput(String(Number((exactDuration / 60).toFixed(2))));
       }
-      setMessage(`Озвучка готова: ${clock(exactDuration)}. Длительность MP4 будет точно по голосу, без растягивания и тишины.`);
+      setMessage(fitVoiceToVideo
+        ? `Озвучка готова и точно подогнана под видео: ${clock(exactDuration)}.`
+        : `Озвучка готова: ${clock(exactDuration)}. Длительность MP4 будет точно по голосу, без растягивания и тишины.`);
     };
     probe.onerror = () => setMessage("Голос создан, но браузер не смог прочитать аудиофайл.");
     setAudioName(file.name);
@@ -604,6 +697,32 @@ export default function Home() {
   function handleAudio(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (file) void attachAudio(file);
+  }
+
+  function handleReferenceVideo(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const probe = document.createElement("video");
+    probe.preload = "metadata";
+    probe.onloadedmetadata = () => {
+      const exactDuration = Number((probe.duration || 0).toFixed(3));
+      URL.revokeObjectURL(url);
+      if (!exactDuration) {
+        setMessage("Не удалось определить длительность выбранного видео.");
+        return;
+      }
+      setFitVoiceToVideo(true);
+      setReferenceVideoName(file.name);
+      setTargetDuration(exactDuration);
+      setDurationMinutesInput(String(Number((exactDuration / 60).toFixed(3))));
+      setMessage(`Видео «${file.name}» длится ${clock(exactDuration)}. Новая WAV будет подогнана ровно под него.`);
+    };
+    probe.onerror = () => {
+      URL.revokeObjectURL(url);
+      setMessage("Браузер не смог прочитать длительность этого MP4.");
+    };
+    probe.src = url;
   }
 
   function measureAudio(file: File) {
@@ -728,6 +847,48 @@ export default function Home() {
   }
 
   async function requestVoiceTrack(list: string[], text: string, desiredSeconds = 0, previousSeconds = 0) {
+    if (voice === QWEN_CLOUD_CLONE_ID) {
+      const cleanFalKey = falKey.trim();
+      if (!cleanFalKey) throw new Error("Вставь Fal.ai API key под выбором голоса.");
+      let embeddingUrl = localStorage.getItem(QWEN_EMBEDDING_STORAGE_KEY) || "";
+      if (!embeddingUrl) {
+        setMessage("Один раз создаю облачный отпечаток эталонного голоса…");
+        const referenceResponse = await fetch(QWEN_REFERENCE_FILE);
+        if (!referenceResponse.ok) throw new Error("Не нашёл очищенный WAV-образец голоса");
+        const referenceType = referenceResponse.headers.get("content-type") || "audio/wav";
+        const audioDataUrl = `data:${referenceType};base64,${bytesToBase64(await referenceResponse.arrayBuffer())}`;
+        const cloneResponse = await fetch("/api/fal-voice", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "clone", apiKey: cleanFalKey, audioDataUrl, referenceText: QWEN_REFERENCE_TEXT }),
+        });
+        const cloneResult = await cloneResponse.json() as { embeddingUrl?: string; error?: string };
+        if (!cloneResponse.ok || !cloneResult.embeddingUrl) throw new Error(cloneResult.error || "Облачный Qwen не создал отпечаток голоса");
+        embeddingUrl = cloneResult.embeddingUrl;
+        localStorage.setItem(QWEN_EMBEDDING_STORAGE_KEY, embeddingUrl);
+      }
+
+      const response = await fetch("/api/fal-voice", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "speak",
+          apiKey: cleanFalKey,
+          embeddingUrl,
+          referenceText: QWEN_REFERENCE_TEXT,
+          text: applyRussianVoiceStresses(text),
+        }),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as { error?: string };
+        if (/embedding|expired|not found/i.test(result.error || "")) localStorage.removeItem(QWEN_EMBEDDING_STORAGE_KEY);
+        throw new Error(result.error || `Облачный Qwen: ${response.status}`);
+      }
+      const audio = await response.blob();
+      if (!audio.size) throw new Error("Облачный Qwen вернул пустой звук");
+      const rawFile = new File([audio], "qwen-cloud-youtube-clone.mp3", { type: audio.type || "audio/mpeg" });
+      return VOICE_TEMPO === 1 ? rawFile : slowVoiceFile(rawFile);
+    }
     let lastError = "Озвучка не создалась";
     const attempts = Math.min(5, list.length);
     for (let attempt = 0; attempt < attempts; attempt++) {
@@ -867,7 +1028,9 @@ export default function Home() {
     onProgress?: (completed: number, total: number) => void,
     onOpeningDuration?: (seconds: number) => void,
   ) {
-    const chunks = splitVoiceText(text);
+    // Cloud Qwen receives coherent sentence groups. The local cache keeps every
+    // finished group, so a long narration can resume without paying for it twice.
+    const chunks = splitVoiceText(text, voice === QWEN_CLOUD_CLONE_ID ? QWEN_REQUEST_CHARS : 220);
     const hasOpeningChunk = chunks[0]?.startsWith("«") && chunks[0].includes("»");
     let exactOpeningSeconds = 0;
     const files: File[] = [];
@@ -878,7 +1041,7 @@ export default function Home() {
       // chunk to last at least eight seconds made valid clips (for example six words)
       // look truncated and stopped long narrations at the same chunk every time.
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 1.5, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `natural-achird-v25:gemini-2.5-pro-popular-video-profile:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `narrator-v32:${voice}:${VOICE_TEMPO}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
@@ -900,7 +1063,7 @@ export default function Home() {
       const requestedSeconds = chunkSeconds;
       let part = await requestVoiceTrack(list, chunks[index], requestedSeconds);
       let partDuration = await measureAudio(part);
-      if (voice !== "Gacrux" && (partDuration < chunkSeconds * 0.9 || partDuration > chunkSeconds * 1.12)) {
+      if (voice !== "Gacrux" && voice !== QWEN_CLOUD_CLONE_ID && (partDuration < chunkSeconds * 0.9 || partDuration > chunkSeconds * 1.12)) {
         const retry = await requestVoiceTrack(list, chunks[index], requestedSeconds, partDuration);
         const retryDuration = await measureAudio(retry);
         if (Math.abs(retryDuration - chunkSeconds) < Math.abs(partDuration - chunkSeconds)) {
@@ -922,18 +1085,24 @@ export default function Home() {
       onProgress?.(index + 1, chunks.length);
     }
     const combined = await combineVoiceFiles(files, chunks);
+    if (fitVoiceToVideo && desiredSeconds > 0) {
+      setMessage(`Подгоняю готовую озвучку точно под ${clock(desiredSeconds)} без изменения тембра…`);
+      return fitVoiceFileToDuration(combined, desiredSeconds);
+    }
     return combined;
   }
 
   async function generateVoice() {
     const list = keyList();
-    if (!list.length) { setShowKeys(true); return; }
+    if (!list.length && voice !== QWEN_CLOUD_CLONE_ID) { setShowKeys(true); return; }
     if (!script.trim()) { setMessage("Снача вставь сценарий — именно его сайт озвучит."); return; }
     setIsGeneratingVoice(true);
     setVoiceError("");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
-    const voicePartCount = splitVoiceText(voiceScript).length;
-    setMessage(`Gemini 2.5 Pro создаёт озвучку повышенного качества: 0 из ${voicePartCount}. Не закрывай страницу.`);
+    const voicePartCount = splitVoiceText(voiceScript, voice === QWEN_CLOUD_CLONE_ID ? QWEN_REQUEST_CHARS : 220).length;
+    setMessage(voice === QWEN_CLOUD_CLONE_ID
+      ? `Облачный Qwen создаёт тот же голос: 0 из ${voicePartCount}. Готовые части сохраняются автоматически.`
+      : `Gemini 2.5 Pro создаёт озвучку повышенного качества: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
       await attachAudio(await requestLongVoiceTrack(
         list,
@@ -953,16 +1122,16 @@ export default function Home() {
 
   async function previewVoice() {
     const list = keyList();
-    if (!list.length) { setShowKeys(true); return; }
+    if (!list.length && voice !== QWEN_CLOUD_CLONE_ID) { setShowKeys(true); return; }
     setIsGeneratingVoicePreview(true);
     setVoiceError("");
-    setMessage("Gemini создаёт чистый пример без обработки скорости…");
+    setMessage(voice === QWEN_CLOUD_CLONE_ID ? "Облачный Qwen создаёт пример точного клона…" : "Gemini создаёт чистый пример без обработки скорости…");
     try {
       const blob = (await requestVoiceTrack(list, VOICE_PREVIEW_TEXT, 8)).slice();
       if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
       const url = URL.createObjectURL(blob);
       setVoicePreviewUrl(url);
-      setMessage(`Новый пример Gemini ${voice} готов. Если он не запустился сам, нажми ▶.`);
+      setMessage(voice === QWEN_CLOUD_CLONE_ID ? "Пример облачного клона Qwen готов." : `Новый пример Gemini ${voice} готов. Если он не запустился сам, нажми ▶.`);
       setTimeout(() => voicePreviewRef.current?.play().catch(() => undefined), 0);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Пример голоса не создался";
@@ -1319,7 +1488,7 @@ export default function Home() {
     setPipelineProgress(2);
     setPipelineStage("voice");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
-    setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceScript).length} частей…`);
+    setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceScript, voice === QWEN_CLOUD_CLONE_ID ? QWEN_REQUEST_CHARS : 220).length} частей…`);
     setVoiceError("");
     try {
       const hasOpeningQuote = false;
@@ -1343,7 +1512,7 @@ export default function Home() {
           setOpeningQuoteDuration(seconds);
         } : undefined);
         duration = await measureAudio(soundtrack);
-        if (splitVoiceText(voiceScript).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
+        if (splitVoiceText(voiceScript, voice === QWEN_CLOUD_CLONE_ID ? QWEN_REQUEST_CHARS : 220).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
           setPipelineLabel(`Корректирую темп озвучки: было ${clock(duration)}, нужно ${clock(targetDuration)}…`);
           soundtrack = await requestVoiceTrack(list, voiceScript, targetDuration, duration);
           duration = await measureAudio(soundtrack);
@@ -1491,7 +1660,8 @@ export default function Home() {
         <div className="quickStep">
           <div className="quickTitle"><b>2</b><div><h2>Озвучка</h2><p>Выбери голос и нажми большую кнопку. Он прочитает текст сверху.</p></div></div>
           <div className="simpleVoiceRow">
-            <label>Голос<select value={voice} onChange={(e) => { void selectNarrator(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+            <label>Голос<select value={voice} onChange={(e) => { void selectNarrator(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><small>{voice === QWEN_CLOUD_CLONE_ID ? "Тот же Qwen 1.7B и очищенный WAV-образец · Voicebox не нужен" : "Облачный голос Gemini"}</small></label>
+            {voice === QWEN_CLOUD_CLONE_ID && <label>Fal.ai API key<input type="password" value={falKey} onChange={(e) => { const value = e.target.value.trim(); setFalKey(value); localStorage.setItem("cineframe_fal_key", value); }} placeholder="Вставь ключ Fal.ai" autoComplete="off" disabled={projectLocked} /><small>Хранится только в этом браузере и отправляется через защищённый маршрут сайта.</small></label>}
             <button className="previewButton" onClick={previewVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoicePreview ? "Создаю пример…" : "▶ Пример голоса"}</button>
             <button className="createVoiceButton" onClick={generateVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoice ? "Озвучиваю текст…" : "Создать озвучку текста"}</button>
           </div>
@@ -1500,6 +1670,7 @@ export default function Home() {
           </div>
           {audioUrl && <div className="mainAudio"><div><b>✓ Озвучка ролика готова</b><small>{clock(audioDuration)} · {audioName}{audioIncludesShortsOutro ? " · переход на основной канал добавлен" : ""}</small><a href={audioUrl} download="cineframe-full-voice.wav">Скачать полную WAV</a></div><audio ref={audioRef} src={audioUrl} controls onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)} /></div>}
           <label className={`compactUpload ${audioName ? "filled" : ""}`}><input type="file" accept="audio/*" onChange={handleAudio} disabled={projectLocked} /><span>Или загрузить свою MP3 / WAV</span></label>
+          <label className={`compactUpload ${fitVoiceToVideo ? "filled" : ""}`}><input type="file" accept="video/mp4,video/*" onChange={handleReferenceVideo} disabled={projectLocked} /><span>{fitVoiceToVideo ? `✓ Подгонка под ${referenceVideoName} · ${clock(targetDuration)}` : "Подогнать новую озвучку под готовый MP4"}</span></label>
         </div>
 
         <div className="quickDivider" />

@@ -30,6 +30,9 @@ export type ProjectCheckpoint = {
   openingQuoteDuration?: number;
   audioSource?: "generated" | "uploaded";
   audioIncludesShortsOutro?: boolean;
+  voiceRevision?: number;
+  fitVoiceToVideo?: boolean;
+  referenceVideoName?: string;
   scenes: SavedScene[];
   pipelineStage: "idle" | "voice" | "frames" | "render" | "done" | "error";
   pipelineProgress: number;
