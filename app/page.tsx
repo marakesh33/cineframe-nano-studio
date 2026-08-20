@@ -34,17 +34,20 @@ const STYLE_REFERENCE_PATHS = [
   "/style-references/psychology-style-user-target.png",
 ];
 
+const QWEN_LOCAL_CLONE_ID = "qwen-local-youtube-clone";
 const QWEN_CLOUD_CLONE_ID = "qwen-cloud-youtube-clone";
+const QWEN_LOCAL_PROFILE_ID = "6c7a7827-0001-461e-a50e-5703d42c0b54";
 const QWEN_REFERENCE_FILE = "/wealth-simple-voice-reference-clean.wav";
 const QWEN_EMBEDDING_STORAGE_KEY = "cineframe_fal_qwen_embedding_v1";
 const QWEN_REQUEST_CHARS = 650;
-const VOICE_REVISION = 5;
+const VOICE_REVISION = 6;
 const QWEN_REFERENCE_TEXT = `Начнем с правды, которую мало кто хочет слышать — разбогатеть несложно.
 Людям нравится думать иначе. Они рассуждают об этом так, будто существует тайная формула, спрятанная в древних трактатах, или доступная лишь избранным.
 Но реальность гораздо проще.`;
 
 const VOICES = [
-  { id: QWEN_CLOUD_CLONE_ID, label: "Точный клон образца · Cloud Qwen 1.7B" },
+  { id: QWEN_LOCAL_CLONE_ID, label: "Точный клон образца · бесплатно на Mac" },
+  { id: QWEN_CLOUD_CLONE_ID, label: "Точный клон образца · Fal.ai (платно)" },
   { id: "Algieba", label: "Algieba · мягкий живой мужской (новый)" },
   { id: "Charon", label: "Charon · спокойный информативный" },
   { id: "Gacrux", label: "Gacrux · зрелый и мягкий" },
@@ -52,6 +55,10 @@ const VOICES = [
   { id: "Achird", label: "Achird · дружелюбный (текущий старый)" },
   { id: "Fenrir", label: "Fenrir · энергичный" },
 ];
+
+function isQwenCloneVoice(voiceId: string) {
+  return voiceId === QWEN_LOCAL_CLONE_ID || voiceId === QWEN_CLOUD_CLONE_ID;
+}
 
 const DEFAULT_VOICE_DIRECTION = `# AUDIO PROFILE
 Nikolai is a native Russian male essay narrator in his early thirties. His voice is warm, smooth and grounded, with the natural imperfections of a real person speaking from experience. He is intelligent without sounding academic, intimate without whispering, and emotionally present without acting.
@@ -460,7 +467,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [isGeneratingVoicePreview, setIsGeneratingVoicePreview] = useState(false);
-  const [voice, setVoice] = useState(QWEN_CLOUD_CLONE_ID);
+  const [voice, setVoice] = useState(QWEN_LOCAL_CLONE_ID);
   const [voiceDirection, setVoiceDirection] = useState(DEFAULT_VOICE_DIRECTION);
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -509,13 +516,13 @@ export default function Home() {
         setQuality(checkpoint.quality === "1K" ? "2K" : checkpoint.quality || "2K");
         setAspect(checkpoint.aspect);
         const restoredAudioSource = checkpoint.audioSource || (checkpoint.audioName.startsWith("gemini-") ? "generated" : "uploaded");
-        const restoredVoice = checkpoint.voice === QWEN_CLOUD_CLONE_ID ? checkpoint.voice : QWEN_CLOUD_CLONE_ID;
+        const restoredVoice = QWEN_LOCAL_CLONE_ID;
         const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && (
-          checkpoint.voice !== QWEN_CLOUD_CLONE_ID
+          checkpoint.voice !== QWEN_LOCAL_CLONE_ID
           || (checkpoint.voiceRevision || 0) < VOICE_REVISION
         );
         setVoice(restoredVoice);
-        setVoiceDirection(restoredVoice === QWEN_CLOUD_CLONE_ID || restoredVoice === "Algieba" ? DEFAULT_VOICE_DIRECTION : checkpoint.voiceDirection || DEFAULT_VOICE_DIRECTION.replace(/\bAlgieba\b/g, restoredVoice));
+        setVoiceDirection(restoredVoice === QWEN_CLOUD_CLONE_ID || restoredVoice === QWEN_LOCAL_CLONE_ID || restoredVoice === "Algieba" ? DEFAULT_VOICE_DIRECTION : checkpoint.voiceDirection || DEFAULT_VOICE_DIRECTION.replace(/\bAlgieba\b/g, restoredVoice));
         setScenes(savedScenes as Scene[]);
         setSelectedId(savedScenes[0]?.id || null);
         setAudioDuration(legacyVoiceNeedsRefresh ? 0 : checkpoint.audioDuration);
@@ -847,6 +854,24 @@ export default function Home() {
   }
 
   async function requestVoiceTrack(list: string[], text: string, desiredSeconds = 0, previousSeconds = 0) {
+    if (voice === QWEN_LOCAL_CLONE_ID) {
+      const response = await fetch("/api/voicebox", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          profileId: QWEN_LOCAL_PROFILE_ID,
+          text: applyRussianVoiceStresses(text),
+        }),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(result.error || `Voicebox: ${response.status}`);
+      }
+      const audio = await response.blob();
+      if (!audio.size) throw new Error("Voicebox вернул пустой WAV");
+      const rawFile = new File([audio], "qwen-local-youtube-clone.wav", { type: audio.type || "audio/wav" });
+      return VOICE_TEMPO === 1 ? rawFile : slowVoiceFile(rawFile);
+    }
     if (voice === QWEN_CLOUD_CLONE_ID) {
       const cleanFalKey = falKey.trim();
       if (!cleanFalKey) throw new Error("Вставь Fal.ai API key под выбором голоса.");
@@ -1028,9 +1053,9 @@ export default function Home() {
     onProgress?: (completed: number, total: number) => void,
     onOpeningDuration?: (seconds: number) => void,
   ) {
-    // Cloud Qwen receives coherent sentence groups. The local cache keeps every
-    // finished group, so a long narration can resume without paying for it twice.
-    const chunks = splitVoiceText(text, voice === QWEN_CLOUD_CLONE_ID ? QWEN_REQUEST_CHARS : 220);
+    // Qwen receives coherent sentence groups. The local cache keeps every
+    // finished group, so a long narration can resume after an interruption.
+    const chunks = splitVoiceText(text, isQwenCloneVoice(voice) ? QWEN_REQUEST_CHARS : 220);
     const hasOpeningChunk = chunks[0]?.startsWith("«") && chunks[0].includes("»");
     let exactOpeningSeconds = 0;
     const files: File[] = [];
@@ -1063,7 +1088,7 @@ export default function Home() {
       const requestedSeconds = chunkSeconds;
       let part = await requestVoiceTrack(list, chunks[index], requestedSeconds);
       let partDuration = await measureAudio(part);
-      if (voice !== "Gacrux" && voice !== QWEN_CLOUD_CLONE_ID && (partDuration < chunkSeconds * 0.9 || partDuration > chunkSeconds * 1.12)) {
+      if (voice !== "Gacrux" && !isQwenCloneVoice(voice) && (partDuration < chunkSeconds * 0.9 || partDuration > chunkSeconds * 1.12)) {
         const retry = await requestVoiceTrack(list, chunks[index], requestedSeconds, partDuration);
         const retryDuration = await measureAudio(retry);
         if (Math.abs(retryDuration - chunkSeconds) < Math.abs(partDuration - chunkSeconds)) {
@@ -1094,13 +1119,15 @@ export default function Home() {
 
   async function generateVoice() {
     const list = keyList();
-    if (!list.length && voice !== QWEN_CLOUD_CLONE_ID) { setShowKeys(true); return; }
+    if (!list.length && !isQwenCloneVoice(voice)) { setShowKeys(true); return; }
     if (!script.trim()) { setMessage("Снача вставь сценарий — именно его сайт озвучит."); return; }
     setIsGeneratingVoice(true);
     setVoiceError("");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
-    const voicePartCount = splitVoiceText(voiceScript, voice === QWEN_CLOUD_CLONE_ID ? QWEN_REQUEST_CHARS : 220).length;
-    setMessage(voice === QWEN_CLOUD_CLONE_ID
+    const voicePartCount = splitVoiceText(voiceScript, isQwenCloneVoice(voice) ? QWEN_REQUEST_CHARS : 220).length;
+    setMessage(voice === QWEN_LOCAL_CLONE_ID
+      ? `Локальный Qwen создаёт голос бесплатно: 0 из ${voicePartCount}. Готовые части сохраняются автоматически.`
+      : voice === QWEN_CLOUD_CLONE_ID
       ? `Облачный Qwen создаёт тот же голос: 0 из ${voicePartCount}. Готовые части сохраняются автоматически.`
       : `Gemini 2.5 Pro создаёт озвучку повышенного качества: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
@@ -1122,16 +1149,16 @@ export default function Home() {
 
   async function previewVoice() {
     const list = keyList();
-    if (!list.length && voice !== QWEN_CLOUD_CLONE_ID) { setShowKeys(true); return; }
+    if (!list.length && !isQwenCloneVoice(voice)) { setShowKeys(true); return; }
     setIsGeneratingVoicePreview(true);
     setVoiceError("");
-    setMessage(voice === QWEN_CLOUD_CLONE_ID ? "Облачный Qwen создаёт пример точного клона…" : "Gemini создаёт чистый пример без обработки скорости…");
+    setMessage(voice === QWEN_LOCAL_CLONE_ID ? "Локальный Qwen бесплатно создаёт пример точного клона…" : voice === QWEN_CLOUD_CLONE_ID ? "Облачный Qwen создаёт пример точного клона…" : "Gemini создаёт чистый пример без обработки скорости…");
     try {
       const blob = (await requestVoiceTrack(list, VOICE_PREVIEW_TEXT, 8)).slice();
       if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
       const url = URL.createObjectURL(blob);
       setVoicePreviewUrl(url);
-      setMessage(voice === QWEN_CLOUD_CLONE_ID ? "Пример облачного клона Qwen готов." : `Новый пример Gemini ${voice} готов. Если он не запустился сам, нажми ▶.`);
+      setMessage(voice === QWEN_LOCAL_CLONE_ID ? "Пример локального клона Qwen готов." : voice === QWEN_CLOUD_CLONE_ID ? "Пример облачного клона Qwen готов." : `Новый пример Gemini ${voice} готов. Если он не запустился сам, нажми ▶.`);
       setTimeout(() => voicePreviewRef.current?.play().catch(() => undefined), 0);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Пример голоса не создался";
@@ -1488,7 +1515,7 @@ export default function Home() {
     setPipelineProgress(2);
     setPipelineStage("voice");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
-    setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceScript, voice === QWEN_CLOUD_CLONE_ID ? QWEN_REQUEST_CHARS : 220).length} частей…`);
+    setPipelineLabel(`Создаю озвучку: 0 из ${splitVoiceText(voiceScript, isQwenCloneVoice(voice) ? QWEN_REQUEST_CHARS : 220).length} частей…`);
     setVoiceError("");
     try {
       const hasOpeningQuote = false;
@@ -1512,7 +1539,7 @@ export default function Home() {
           setOpeningQuoteDuration(seconds);
         } : undefined);
         duration = await measureAudio(soundtrack);
-        if (splitVoiceText(voiceScript, voice === QWEN_CLOUD_CLONE_ID ? QWEN_REQUEST_CHARS : 220).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
+        if (!isQwenCloneVoice(voice) && splitVoiceText(voiceScript, 220).length === 1 && (duration < targetDuration * 0.85 || duration > targetDuration * 1.15)) {
           setPipelineLabel(`Корректирую темп озвучки: было ${clock(duration)}, нужно ${clock(targetDuration)}…`);
           soundtrack = await requestVoiceTrack(list, voiceScript, targetDuration, duration);
           duration = await measureAudio(soundtrack);
@@ -1660,7 +1687,7 @@ export default function Home() {
         <div className="quickStep">
           <div className="quickTitle"><b>2</b><div><h2>Озвучка</h2><p>Выбери голос и нажми большую кнопку. Он прочитает текст сверху.</p></div></div>
           <div className="simpleVoiceRow">
-            <label>Голос<select value={voice} onChange={(e) => { void selectNarrator(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><small>{voice === QWEN_CLOUD_CLONE_ID ? "Тот же Qwen 1.7B и очищенный WAV-образец · Voicebox не нужен" : "Облачный голос Gemini"}</small></label>
+            <label>Голос<select value={voice} onChange={(e) => { void selectNarrator(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><small>{voice === QWEN_LOCAL_CLONE_ID ? "Тот же Qwen 1.7B и голос из популярного ролика · без оплаты, Voicebox должен быть открыт" : voice === QWEN_CLOUD_CLONE_ID ? "Тот же голос в облаке · Fal.ai списывает деньги за символы" : "Облачный голос Gemini"}</small></label>
             {voice === QWEN_CLOUD_CLONE_ID && <label>Fal.ai API key<input type="password" value={falKey} onChange={(e) => { const value = e.target.value.trim(); setFalKey(value); localStorage.setItem("cineframe_fal_key", value); }} placeholder="Вставь ключ Fal.ai" autoComplete="off" disabled={projectLocked} /><small>Хранится только в этом браузере и отправляется через защищённый маршрут сайта.</small></label>}
             <button className="previewButton" onClick={previewVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoicePreview ? "Создаю пример…" : "▶ Пример голоса"}</button>
             <button className="createVoiceButton" onClick={generateVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoice ? "Озвучиваю текст…" : "Создать озвучку текста"}</button>
