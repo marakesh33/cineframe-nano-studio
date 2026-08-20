@@ -117,9 +117,9 @@ export async function POST(request: Request) {
     if (!script) return Response.json({ error: "Сценарий пуст" }, { status: 400 });
     if (script.length > 12000) return Response.json({ error: "Для теста вставь текст до 12 000 символов" }, { status: 400 });
 
-    const voice = ALLOWED_VOICES.has(body.voice || "") ? body.voice : "Gacrux";
+    const voice = ALLOWED_VOICES.has(body.voice || "") ? body.voice : "Charon";
     if (!apiKey) return Response.json({ error: "Нужен Google API key" }, { status: 400 });
-    const direction = body.direction?.trim() || "Match the narrator from the reference video «Богатство — это просто. Но жестоко» as closely as possible. Use the Gacrux voice as a native Russian male narrator, 40–55 years old: deep warm mature baritone, calm authority, intelligent and emotionally restrained. Maintain 108–114 words per minute, targeting exactly 111. Use only short natural sentence pauses and never add dramatic silence, slow meditative delivery or elongated vowels. Give the first sentence firm confident hook emphasis. Avoid advertising enthusiasm, theatrical acting, whispering, singing, exaggerated emotion and robotic rhythm.";
+    const direction = body.direction?.trim() || "Use Charon as a natural native Russian male speaker, approximately 35–50 years old. Speak as if explaining an important idea to one person in a quiet room, not as a commercial announcer or an AI audiobook voice. Keep a warm grounded chest tone, relaxed consonants, subtle human breaths, small natural variations in pace and understated emotion. Maintain a continuous conversational cadence around 105–112 words per minute. Use short natural pauses, but never add dramatic silence or stretch vowels. Begin confidently without raising the volume. Avoid theatrical narration, trailer voice, motivational advertising, exaggerated gravitas, whispering, singing, perfectly uniform rhythm and over-articulation.";
     const desiredSeconds = Number.isFinite(body.desiredSeconds) ? Math.max(0, Math.min(600, Math.round(body.desiredSeconds || 0))) : 0;
     const previousSeconds = Number.isFinite(body.previousSeconds) ? Math.max(0, Math.round(body.previousSeconds || 0)) : 0;
     const timing = desiredSeconds

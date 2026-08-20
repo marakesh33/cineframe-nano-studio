@@ -37,12 +37,12 @@ const STYLE_REFERENCE_PATHS = [
 ];
 
 const VOICES = [
-  { id: "Gacrux", label: "Gacrux · прежний голос Gemini · темп 0,8×" },
+  { id: "Charon", label: "Charon · естественный мужской Gemini" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Match the narrator from the reference video «Богатство — это просто. Но жестоко» as closely as possible. Use the Gacrux voice as a native Russian male narrator, 40–55 years old: deep warm mature baritone, calm authority, intelligent and emotionally restrained. Hold a continuous measured cadence of 108–114 words per minute, targeting exactly 111. Use short natural sentence pauses of about 0.25–0.45 seconds and paragraph pauses no longer than 0.7 seconds. Never stretch vowels, slow down meditatively or insert dramatic silence. The first sentence is a firm, clear hook; contrasts receive subtle confident emphasis. Avoid advertising enthusiasm, theatrical acting, whispering, singing, exaggerated emotion and robotic rhythm. Read the supplied script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `Use Charon as a natural native Russian male speaker, approximately 35–50 years old. Speak as if explaining an important idea to one person in a quiet room, not as a commercial announcer or an AI audiobook voice. Keep a warm grounded chest tone, relaxed consonants, subtle human breaths, small natural variations in pace and understated emotion. Maintain a continuous conversational cadence around 105–112 words per minute. Use short natural pauses, but never add dramatic silence or stretch vowels. Begin confidently without raising the volume. Avoid theatrical narration, trailer voice, motivational advertising, exaggerated gravitas, whispering, singing, perfectly uniform rhythm and over-articulation. Read the supplied Russian script verbatim without adding or removing words.`;
 const POPULAR_VOICE_WPM = 106;
-const VOICE_TEMPO = 0.8;
+const VOICE_TEMPO = 1;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
 const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
 const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
@@ -316,7 +316,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [isGeneratingVoicePreview, setIsGeneratingVoicePreview] = useState(false);
-  const [voice, setVoice] = useState("Gacrux");
+  const [voice, setVoice] = useState("Charon");
   const [voiceDirection, setVoiceDirection] = useState(DEFAULT_VOICE_DIRECTION);
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -364,8 +364,8 @@ export default function Home() {
         setQuality(checkpoint.quality === "1K" ? "2K" : checkpoint.quality || "2K");
         setAspect(checkpoint.aspect);
         const restoredAudioSource = checkpoint.audioSource || (checkpoint.audioName.startsWith("gemini-") ? "generated" : "uploaded");
-        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && checkpoint.voice !== "Gacrux";
-        setVoice("Gacrux");
+        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && checkpoint.voice !== "Charon";
+        setVoice("Charon");
         setVoiceDirection(DEFAULT_VOICE_DIRECTION);
         setScenes(savedScenes as Scene[]);
         setSelectedId(savedScenes[0]?.id || null);
@@ -644,7 +644,7 @@ export default function Home() {
           const blob = await readVoiceResponse(response);
           if (!blob.size) throw new Error("Сервис вернул пустую аудиодорожку");
           const rawFile = new File([blob], `gemini-${voice.toLowerCase()}.wav`, { type: blob.type || "audio/wav" });
-          return slowVoiceFile(rawFile);
+          return VOICE_TEMPO === 1 ? rawFile : slowVoiceFile(rawFile);
         } catch (error) {
           lastError = error instanceof Error ? error.message : "Gemini не вернула аудиодорожку";
           continue;
@@ -748,7 +748,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `wealth-simple-voice-v12:gemini-2.5-original-tempo-0.8:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `natural-charon-v14:gemini-2.5-native-clean:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
@@ -803,7 +803,7 @@ export default function Home() {
     setVoiceError("");
     const voiceScript = voiceTextForScript(script, aspect === "9:16");
     const voicePartCount = splitVoiceText(voiceScript).length;
-    setMessage(`Gemini создаёт озвучку в более спокойном темпе: 0 из ${voicePartCount}. Не закрывай страницу.`);
+    setMessage(`Gemini создаёт чистую озвучку без искусственного растягивания: 0 из ${voicePartCount}. Не закрывай страницу.`);
     try {
       await attachAudio(await requestLongVoiceTrack(
         list,
@@ -826,7 +826,7 @@ export default function Home() {
     if (!list.length) { setShowKeys(true); return; }
     setIsGeneratingVoicePreview(true);
     setVoiceError("");
-    setMessage("Gemini создаёт новый пример в более спокойном темпе…");
+    setMessage("Gemini создаёт чистый пример без обработки скорости…");
     try {
       const blob = (await requestVoiceTrack(list, VOICE_PREVIEW_TEXT, 9)).slice();
       if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
