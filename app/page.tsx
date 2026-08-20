@@ -35,10 +35,14 @@ const STYLE_REFERENCE_PATHS = [
 ];
 
 const VOICES = [
-  { id: "Achird", label: "Achird · живой дружелюбный Gemini" },
+  { id: "Charon", label: "Charon · спокойный информативный (рекомендую)" },
+  { id: "Gacrux", label: "Gacrux · зрелый и мягкий" },
+  { id: "Schedar", label: "Schedar · ровный и естественный" },
+  { id: "Achird", label: "Achird · дружелюбный (текущий старый)" },
+  { id: "Fenrir", label: "Fenrir · энергичный" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Use Achird as a natural native Russian male narrator matching the shared delivery profile of the channel's most successful videos. Keep a medium warm male register around 118–126 Hz, normal full speaking volume, relaxed consonants and clear but not over-polished Russian diction. Maintain a flowing pace of 126–132 words per minute, targeting 129. Speak in connected thought groups: short linking words may move faster, important words receive brief natural weight, and sentence endings soften without losing clarity. Use quick breaths and pauses around 0.18–0.35 seconds, with an occasional 0.45–0.6 second pause only when the idea genuinely changes. Begin directly and confidently but without shouting, trailer drama or a hard artificial attack. Let interest, warning and conviction appear naturally from the meaning instead of using one fixed emotion. Avoid slow meditation, robotic precision, equal spacing between words, identical sentence melodies, theatrical acting, whispering and stretched vowels. Read the supplied Russian script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `Use Charon as a natural native Russian male narrator matching the shared delivery profile of the channel's most successful videos. Keep a medium warm male register around 118–126 Hz, normal full speaking volume, relaxed consonants and clear but not over-polished Russian diction. Maintain a flowing pace of 126–132 words per minute, targeting 129. Speak in connected thought groups: short linking words may move faster, important words receive brief natural weight, and sentence endings soften without losing clarity. Use quick breaths and pauses around 0.18–0.35 seconds, with an occasional 0.45–0.6 second pause only when the idea genuinely changes. Begin directly and confidently but without shouting, trailer drama or a hard artificial attack. Let interest, warning and conviction appear naturally from the meaning instead of using one fixed emotion. Avoid slow meditation, robotic precision, equal spacing between words, identical sentence melodies, theatrical acting, whispering and stretched vowels. Read the supplied Russian script verbatim without adding or removing words.`;
 const POPULAR_VOICE_WPM = 129;
 const VOICE_TEMPO = 1;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
@@ -365,7 +369,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [isGeneratingVoicePreview, setIsGeneratingVoicePreview] = useState(false);
-  const [voice, setVoice] = useState("Achird");
+  const [voice, setVoice] = useState("Charon");
   const [voiceDirection, setVoiceDirection] = useState(DEFAULT_VOICE_DIRECTION);
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -518,6 +522,35 @@ export default function Home() {
     setPipelineStage("idle");
     setPipelineProgress(0);
     setPipelineLabel("Проект изменён. Можно запускать создание.");
+  }
+
+  async function selectNarrator(nextVoice: string) {
+    if (nextVoice === voice) return;
+    // A narrator change must never destroy expensive generated images. Only the
+    // old narration and the MP4 containing it become outdated.
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
+    setVoice(nextVoice);
+    setVoiceDirection((current) => current.replace(/\b(?:Achird|Charon|Gacrux|Schedar|Fenrir)\b/g, nextVoice));
+    setAudioDuration(0);
+    setAudioFile(null);
+    setAudioUrl("");
+    setAudioName("");
+    setAudioSource("uploaded");
+    setAudioIncludesShortsOutro(false);
+    setOpeningQuoteDuration(0);
+    setVideoBlob(null);
+    setVideoUrl("");
+    setVoicePreviewUrl("");
+    setVoiceError("");
+    setPipelineStage("idle");
+    setPipelineProgress(0);
+    setPipelineLabel("Голос изменён. Кадры сохранены — создай новую озвучку.");
+    setMessage("Голос изменён. Все готовые кадры сохранены; старая озвучка удалена из проекта.");
+    await Promise.all([deleteProjectBlob("audio"), deleteProjectBlob("video")]).catch((error: unknown) => {
+      setCheckpointStatus(error instanceof Error ? `Не удалось удалить старый звук: ${error.message}` : "Не удалось удалить старый звук");
+    });
   }
 
   async function attachAudio(file: File, options: { preserveScenes?: boolean; source?: "generated" | "uploaded"; includesShortsOutro?: boolean } = {}) {
@@ -693,7 +726,7 @@ export default function Home() {
         response = await fetch("/api/tts", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection, desiredSeconds, previousSeconds, engine: "gemini-2.5-pro" }),
+          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection.replace(/\b(?:Achird|Charon|Gacrux|Schedar|Fenrir)\b/g, voice), desiredSeconds, previousSeconds, engine: "gemini-2.5-pro" }),
         });
       } catch {
         lastError = "Сетевое соединение прервалось. Автоматически пробую следующий ключ…";
@@ -895,7 +928,7 @@ export default function Home() {
       if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
       const url = URL.createObjectURL(blob);
       setVoicePreviewUrl(url);
-      setMessage("Новый пример Gemini Gacrux готов. Если он не запустился сам, нажми ▶.");
+      setMessage(`Новый пример Gemini ${voice} готов. Если он не запустился сам, нажми ▶.`);
       setTimeout(() => voicePreviewRef.current?.play().catch(() => undefined), 0);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Пример голоса не создался";
@@ -1372,6 +1405,26 @@ export default function Home() {
     }
   }
 
+  async function renderWithoutNarration() {
+    if (!scenes.length || scenes.some((scene) => !scene.image)) {
+      setMessage("Без озвучки можно собрать ролик, когда готовы все кадры.");
+      return;
+    }
+    setPipelineStage("render");
+    setPipelineProgress(80);
+    setPipelineLabel("Собираю MP4 без голоса…");
+    setVoiceError("");
+    const rendered = await renderVideo(scenes, null, targetDuration);
+    if (rendered) {
+      setPipelineProgress(100);
+      setPipelineStage("done");
+      setPipelineLabel("MP4 без голоса готов");
+    } else {
+      setPipelineStage("error");
+      setPipelineLabel("Не удалось собрать MP4 без голоса");
+    }
+  }
+
   const pipelineRunning = pipelineStage === "voice" || pipelineStage === "frames" || pipelineStage === "render";
   const projectLocked = pipelineRunning || isGenerating || isGeneratingVoice || isRendering;
   const pipelineIndex = pipelineStage === "voice" ? 0 : pipelineStage === "frames" ? 1 : pipelineStage === "render" ? 2 : pipelineStage === "done" ? 3 : -1;
@@ -1404,7 +1457,7 @@ export default function Home() {
         <div className="quickStep">
           <div className="quickTitle"><b>2</b><div><h2>Озвучка</h2><p>Выбери голос и нажми большую кнопку. Он прочитает текст сверху.</p></div></div>
           <div className="simpleVoiceRow">
-            <label>Голос<select value={voice} onChange={(e) => { void invalidateGeneratedProject(); setVoice(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+            <label>Голос<select value={voice} onChange={(e) => { void selectNarrator(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
             <button className="previewButton" onClick={previewVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoicePreview ? "Создаю пример…" : "▶ Пример голоса"}</button>
             <button className="createVoiceButton" onClick={generateVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoice ? "Озвучиваю текст…" : "Создать озвучку текста"}</button>
           </div>
@@ -1448,8 +1501,8 @@ export default function Home() {
       <section className="storyboard card quickStoryboard">
         <div className="storyHead"><div><h2>Готовое видео</h2><p>{videoUrl ? `${clock(estimatedDuration)} · ${aspect} · озвучка и анимированные кадры` : pipelineRunning ? pipelineLabel : "Здесь появится один собранный ролик"}</p></div>{videoUrl && <div className="storyActions"><a className="downloadVideo downloadReady" href={videoUrl} download="cineframe-video.mp4">Скачать MP4</a></div>}</div>
         {message && <div className="notice">{message}</div>}
-        {videoUrl ? <div className={`finalVideoCard ${aspect === "9:16" ? "vertical" : ""}`}><video src={videoUrl} controls playsInline /><div><b>✓ Ролик собран целиком</b><span>Кадры, тайминг и озвучка уже внутри MP4.</span><button className="capcutButton" onClick={exportToCapCut} disabled={isExportingCapCut}>{isExportingCapCut ? "ДОБАВЛЯЮ В CAPCUT…" : "ДОБАВИТЬ ПРОЕКТ В CAPCUT"}</button><small className="capcutHint">Каждая фотография будет отдельным клипом на таймлайне.</small>{capCutMessage && <em className={`capcutStatus ${capCutMessage.startsWith("Не ") ? "error" : ""}`}>{capCutMessage}</em>}</div></div> : <div className="compactEmpty"><span>{pipelineRunning ? `${Math.round(pipelineProgress)}%` : "Видео пока нет"}</span><p>{pipelineRunning ? pipelineLabel : "Вставь текст и промпты сцен, затем нажми «Создать готовое видео»."}</p></div>}
-        {scenes.length > 0 && <details className="framesEditor"><summary>Исправить отдельные кадры ({done}/{scenes.length})</summary><div className="framesEditorBody"><div className="framesEditorActions"><span>Открывай это только если нужно заменить конкретную картинку.</span><button className="plain" onClick={() => generateAll() } disabled={isGenerating || pipelineRunning}>Повторить незавершённые</button><button className="plain" onClick={() => renderVideo()} disabled={isRendering || isGenerating || done !== scenes.length}>Пересобрать MP4</button></div><div className="workarea"><div className="sceneGrid">{scenes.map((scene) => <button key={scene.id} onClick={() => setSelectedId(scene.id)} className={`shot ${scene.id === selectedId ? "selected" : ""}`}><div className={`shotImage ${aspect === "9:16" ? "vertical" : ""}`}>{scene.image ? <img src={scene.image} alt={`Кадр ${scene.id}`} /> : <span>{scene.status === "working" ? "…" : String(scene.id).padStart(2,"0")}</span>}<i className={scene.status} /></div><small>{clock(scene.start)}–{clock(scene.end)}</small><p>{scene.text}</p>{scene.error && <em>{scene.error}</em>}</button>)}</div>{selected && <aside className="inspector"><div className={`preview ${aspect === "9:16" ? "vertical" : ""}`}>{selected.image ? <img src={selected.image} alt="Предпросмотр" /> : <div>Кадр {selected.id}</div>}</div><label>Текст кадра<textarea value={selected.text} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, text: e.target.value } : item))} /></label><label>Промпт изображения<textarea className="prompt" value={selected.prompt} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, prompt: e.target.value, status: "ready" } : item))} /></label><button className="generate one" onClick={() => { const list = keyList(); if (!list.length) setShowKeys(true); else void generateScene(selected, list); }}>Повторить этот кадр</button></aside>}</div></div></details>}
+        {videoUrl ? <div className={`finalVideoCard ${aspect === "9:16" ? "vertical" : ""}`}><video src={videoUrl} controls playsInline /><div><b>✓ Ролик собран целиком</b><span>Кадры и тайминг готовы. При необходимости можно убрать голос, не удаляя кадры.</span><button className="capcutButton" onClick={exportToCapCut} disabled={isExportingCapCut}>{isExportingCapCut ? "ДОБАВЛЯЮ В CAPCUT…" : "ДОБАВИТЬ ПРОЕКТ В CAPCUT"}</button><button className="plain" onClick={renderWithoutNarration} disabled={pipelineRunning || done !== scenes.length}>СОБРАТЬ MP4 БЕЗ ГОЛОСА</button><small className="capcutHint">Каждая фотография будет отдельным клипом на таймлайне.</small>{capCutMessage && <em className={`capcutStatus ${capCutMessage.startsWith("Не ") ? "error" : ""}`}>{capCutMessage}</em>}</div></div> : <div className="compactEmpty"><span>{pipelineRunning ? `${Math.round(pipelineProgress)}%` : "Видео пока нет"}</span><p>{pipelineRunning ? pipelineLabel : "Вставь текст и промпты сцен, затем нажми «Создать готовое видео»."}</p></div>}
+        {scenes.length > 0 && <details className="framesEditor"><summary>Исправить отдельные кадры ({done}/{scenes.length})</summary><div className="framesEditorBody"><div className="framesEditorActions"><span>Открывай это только если нужно заменить конкретную картинку.</span><button className="plain" onClick={() => generateAll() } disabled={isGenerating || pipelineRunning}>Повторить незавершённые</button><button className="plain" onClick={() => renderVideo()} disabled={isRendering || isGenerating || done !== scenes.length}>Пересобрать с голосом</button><button className="plain" onClick={renderWithoutNarration} disabled={pipelineRunning || done !== scenes.length}>Собрать без голоса</button></div><div className="workarea"><div className="sceneGrid">{scenes.map((scene) => <button key={scene.id} onClick={() => setSelectedId(scene.id)} className={`shot ${scene.id === selectedId ? "selected" : ""}`}><div className={`shotImage ${aspect === "9:16" ? "vertical" : ""}`}>{scene.image ? <img src={scene.image} alt={`Кадр ${scene.id}`} /> : <span>{scene.status === "working" ? "…" : String(scene.id).padStart(2,"0")}</span>}<i className={scene.status} /></div><small>{clock(scene.start)}–{clock(scene.end)}</small><p>{scene.text}</p>{scene.error && <em>{scene.error}</em>}</button>)}</div>{selected && <aside className="inspector"><div className={`preview ${aspect === "9:16" ? "vertical" : ""}`}>{selected.image ? <img src={selected.image} alt="Предпросмотр" /> : <div>Кадр {selected.id}</div>}</div><label>Текст кадра<textarea value={selected.text} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, text: e.target.value } : item))} /></label><label>Промпт изображения<textarea className="prompt" value={selected.prompt} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, prompt: e.target.value, status: "ready" } : item))} /></label><button className="generate one" onClick={() => { const list = keyList(); if (!list.length) setShowKeys(true); else void generateScene(selected, list); }}>Повторить этот кадр</button></aside>}</div></div></details>}
       </section>
 
       {showKeys && <div className="modal" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowKeys(false); }}><div className="modalBox"><button className="close" onClick={() => setShowKeys(false)}>×</button><h2>Ключи Google AI</h2><p>Они используются и для кадров, и для озвучки. Каждый следующий запрос берёт следующий ключ по кругу. Ключи хранятся только в этом браузере.</p><label className="csvImport"><input type="file" accept=".csv,text/csv" onChange={importKeys} /><span>Импортировать CSV с ключами</span><small>{keyList().length ? `Сейчас сохранено: ${keyList().length}` : "Подойдёт gemini_api_keys_50_2026-07-31.csv"}</small></label><textarea value={keys} onChange={(e) => setKeys(e.target.value)} placeholder={"AIza...\nAIza..."} /><button className="primary" onClick={saveKeys}>Сохранить</button></div></div>}
