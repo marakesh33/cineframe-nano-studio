@@ -807,7 +807,10 @@ export default function Home() {
     for (let index = 0; index < chunks.length; index++) {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
-      const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
+      // Short bridge sentences are naturally only a few seconds long. Requiring every
+      // chunk to last at least eight seconds made valid clips (for example six words)
+      // look truncated and stopped long narrations at the same chunk every time.
+      const chunkSeconds = Math.max(isOpeningChunk ? 3 : 1.5, chunkWords / POPULAR_VOICE_WPM * 60);
       const cacheKey = `natural-achird-v25:gemini-2.5-pro-popular-video-profile:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
