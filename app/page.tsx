@@ -50,12 +50,11 @@ Nikolai is a native Russian male essay narrator in his early thirties. His voice
 Nikolai is recording late in a quiet, softly lit room for one attentive listener. He understands the thought first and then says it, as if this is a genuine conversation rather than a prepared voice-over. The microphone is close, but his voice remains fully voiced, clean and comfortable.
 
 # DIRECTOR'S NOTES
-Speak natural contemporary Russian. Let meaning control rhythm: move easily through linking words, give important ideas subtle weight, and allow tiny thinking moments only where the thought truly turns. Keep a calm flowing pace suitable for a psychological YouTube essay. Vary sentence melody and energy gently so consecutive sentences never land in the same mechanical pattern. Begin softly and naturally, as though continuing an interesting conversation; never hit the first word. Use restrained human curiosity, recognition, concern and warmth when the text calls for them. Keep diction clear but pleasantly relaxed, with natural consonants and no artificial over-articulation.
+Speak natural contemporary Russian. Let meaning control rhythm: move easily through linking words, give important ideas subtle weight, and allow tiny thinking moments only where the thought truly turns. Keep a calm flowing pace suitable for a psychological YouTube essay. Vary sentence melody and energy gently so consecutive sentences never land in the same mechanical pattern. Begin softly and naturally, as though continuing an interesting conversation; never hit the first word. Use restrained human curiosity, recognition, concern and warmth when the text calls for them. Keep diction clear but pleasantly relaxed, with natural consonants and no artificial over-articulation. Include subtle real breathing and tiny changes of energy between thoughts. The delivery may be slightly imperfect and spontaneous: let an occasional phrase flow faster and the next important phrase settle naturally. Do not polish away every human irregularity.
 
 Never sound like an announcer, trailer narrator, meditation app, audiobook caricature or synthetic assistant. No fixed cadence, no metronomic pauses, no identical sentence endings, no grave authority, no theatrical drama, no whisper, no stretched vowels and no audible performance tags. Read the supplied Russian script verbatim without adding, removing or paraphrasing words.`;
 const POPULAR_VOICE_WPM = 129;
 const VOICE_TEMPO = 1;
-const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
 const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
 const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
 const SCENE_SECONDS = 10;
@@ -427,9 +426,10 @@ export default function Home() {
         setQuality(checkpoint.quality === "1K" ? "2K" : checkpoint.quality || "2K");
         setAspect(checkpoint.aspect);
         const restoredAudioSource = checkpoint.audioSource || (checkpoint.audioName.startsWith("gemini-") ? "generated" : "uploaded");
-        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && checkpoint.voice !== "Achird";
-        setVoice("Achird");
-        setVoiceDirection(DEFAULT_VOICE_DIRECTION);
+        const restoredVoice = VOICES.some((item) => item.id === checkpoint.voice) ? checkpoint.voice : "Algieba";
+        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && restoredVoice !== checkpoint.voice;
+        setVoice(restoredVoice);
+        setVoiceDirection(restoredVoice === "Algieba" ? DEFAULT_VOICE_DIRECTION : checkpoint.voiceDirection || DEFAULT_VOICE_DIRECTION.replace(/\bAlgieba\b/g, restoredVoice));
         setScenes(savedScenes as Scene[]);
         setSelectedId(savedScenes[0]?.id || null);
         setAudioDuration(legacyVoiceNeedsRefresh ? 0 : checkpoint.audioDuration);
@@ -760,27 +760,51 @@ export default function Home() {
     throw new Error(lastError);
   }
 
-  async function combineVoiceFiles(files: File[]) {
+  async function combineVoiceFiles(files: File[], sourceChunks: string[] = []) {
     if (files.length === 1) return files[0];
     const audioContext = new AudioContext({ sampleRate: 24000 });
     try {
       const buffers = await Promise.all(files.map((file) => file.arrayBuffer().then((data) => audioContext.decodeAudioData(data))));
       const sampleRate = buffers[0]?.sampleRate || 24000;
-      const pauseSamples = Math.round(sampleRate * VOICE_CHUNK_PAUSE_SECONDS);
-      const totalSamples = buffers.reduce((total, buffer) => total + buffer.length, 0) + pauseSamples * Math.max(0, buffers.length - 1);
+      const threshold = 0.0035;
+      const ranges = buffers.map((buffer) => {
+        let first = 0;
+        let last = buffer.length - 1;
+        const audibleAt = (sample: number) => {
+          for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+            if (Math.abs(buffer.getChannelData(channel)[sample] || 0) >= threshold) return true;
+          }
+          return false;
+        };
+        while (first < last && !audibleAt(first)) first++;
+        while (last > first && !audibleAt(last)) last--;
+        return {
+          start: Math.max(0, first - Math.round(sampleRate * 0.035)),
+          end: Math.min(buffer.length, last + Math.round(sampleRate * 0.09)),
+        };
+      });
+      const pauseLengths = buffers.slice(0, -1).map((_, index) => {
+        const ending = sourceChunks[index]?.trim() || "";
+        const semanticPause = /[?!…]$/.test(ending) ? 0.25 : /[.:;]$/.test(ending) ? 0.19 : 0.13;
+        const naturalVariation = [0.00, 0.025, -0.015, 0.04, -0.025][index % 5];
+        return Math.round(sampleRate * Math.max(0.1, semanticPause + naturalVariation));
+      });
+      const totalSamples = ranges.reduce((total, range) => total + Math.max(0, range.end - range.start), 0)
+        + pauseLengths.reduce((total, length) => total + length, 0);
       const pcm = new Uint8Array(totalSamples * 2);
       const view = new DataView(pcm.buffer);
       let offset = 0;
       for (let bufferIndex = 0; bufferIndex < buffers.length; bufferIndex++) {
         const buffer = buffers[bufferIndex];
-        for (let sample = 0; sample < buffer.length; sample++) {
+        const range = ranges[bufferIndex];
+        for (let sample = range.start; sample < range.end; sample++) {
           let value = 0;
           for (let channel = 0; channel < buffer.numberOfChannels; channel++) value += buffer.getChannelData(channel)[sample] || 0;
           value = Math.max(-1, Math.min(1, value / Math.max(1, buffer.numberOfChannels)));
           view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
           offset += 2;
         }
-        if (bufferIndex < buffers.length - 1) offset += pauseSamples * 2;
+        if (bufferIndex < buffers.length - 1) offset += pauseLengths[bufferIndex] * 2;
       }
       return new File([makeWav([pcm], sampleRate)], `gemini-${voice.toLowerCase()}-full.wav`, { type: "audio/wav" });
     } finally {
@@ -897,7 +921,7 @@ export default function Home() {
       files.push(part);
       onProgress?.(index + 1, chunks.length);
     }
-    const combined = await combineVoiceFiles(files);
+    const combined = await combineVoiceFiles(files, chunks);
     return combined;
   }
 
