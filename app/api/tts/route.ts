@@ -79,14 +79,7 @@ function parseEventStream(text: string) {
 }
 
 function addExpressiveTags(script: string) {
-  const sentences = script.match(/[^.!?…]+(?:[.!?…]+|$)/g)?.map((part) => part.trim()).filter(Boolean) || [script];
-  const cues = [
-    "[curious, conversational, speaking from personal experience]",
-    "[thoughtful, emotionally present, with a small realization]",
-    "[naturally emphatic, personally engaged, not theatrical]",
-    "[reflective, warm, soften the ending]",
-  ];
-  return sentences.map((sentence, index) => `${cues[index % cues.length]} ${sentence}`).join(" ");
+  return `[conversational, emotionally present, speaking from personal experience, connect related sentences naturally without resetting the voice, never leave a long empty gap] ${script}`;
 }
 
 function findErrorMessage(value: unknown): string | null {
@@ -134,7 +127,7 @@ export async function POST(request: Request) {
     const desiredSeconds = Number.isFinite(body.desiredSeconds) ? Math.max(0, Math.min(600, Math.round(body.desiredSeconds || 0))) : 0;
     const previousSeconds = Number.isFinite(body.previousSeconds) ? Math.max(0, Math.round(body.previousSeconds || 0)) : 0;
     const timing = desiredSeconds
-      ? `The complete recording must last approximately ${desiredSeconds} seconds. Maintain about ${Math.max(70, Math.round(script.split(/\s+/).length / desiredSeconds * 60))} words per minute within a tolerance of ±3 WPM. Use short sentence pauses of 0.25–0.45 seconds and paragraph pauses no longer than 0.7 seconds. Never elongate vowels or insert dramatic silence. ${previousSeconds ? `The previous attempt lasted ${previousSeconds} seconds, so deliberately ${previousSeconds < desiredSeconds ? "reduce cadence slightly while keeping pauses short" : "increase cadence and remove every long pause"}.` : "Keep the narration continuous and confident."}`
+      ? `The complete recording should last approximately ${desiredSeconds} seconds, averaging about ${Math.max(70, Math.round(script.split(/\s+/).length / desiredSeconds * 60))} words per minute. Do not pause mechanically at every full stop. Carry related sentences forward as one continuous thought, using only brief breathing space where a real speaker would need it. Pause more clearly only when the meaning genuinely changes. Never elongate vowels or insert dramatic silence. ${previousSeconds ? `The previous attempt lasted ${previousSeconds} seconds, so ${previousSeconds < desiredSeconds ? "relax the cadence slightly without adding empty gaps" : "tighten the cadence and remove unnecessary gaps"}.` : "Let punctuation guide the rhythm without obeying it mechanically."}`
       : "Use a natural medium pace.";
     const performanceScript = body.engine === "gemini-2.5" ? script : addExpressiveTags(script);
     const prompt = `${direction}\n\n${timing}\nStart immediately with the first line as a warm conversational hook. Do not sound grave or commanding. Text in square brackets contains silent performance directions and must not be spoken. Do not add an opening quotation or a long intro unless it is already present in the supplied script. Read the Russian words below verbatim. Do not announce these instructions, do not add an introduction, and do not add or remove any spoken words.\n\nSCRIPT:\n${performanceScript}`;

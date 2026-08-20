@@ -179,6 +179,54 @@ async function slowVoiceFile(file: File, tempo = VOICE_TEMPO) {
   }
 }
 
+async function tightenLongVoicePauses(file: File) {
+  const audioContext = new AudioContext({ sampleRate: 24000 });
+  try {
+    const buffer = await audioContext.decodeAudioData(await file.arrayBuffer());
+    const sampleRate = buffer.sampleRate || 24000;
+    const threshold = 0.008;
+    const minimumSilence = Math.round(sampleRate * 0.58);
+    const keptSilence = Math.round(sampleRate * 0.42);
+    const cuts: Array<[number, number]> = [];
+    let silentStart = -1;
+    for (let sample = 0; sample <= buffer.length; sample++) {
+      let silent = sample < buffer.length;
+      for (let channel = 0; silent && channel < buffer.numberOfChannels; channel++) {
+        if (Math.abs(buffer.getChannelData(channel)[sample] || 0) >= threshold) silent = false;
+      }
+      if (silent && silentStart < 0) silentStart = sample;
+      if (!silent && silentStart >= 0) {
+        const silentLength = sample - silentStart;
+        if (silentLength > minimumSilence) {
+          const excess = silentLength - keptSilence;
+          const cutStart = silentStart + Math.floor(keptSilence / 2);
+          cuts.push([cutStart, cutStart + excess]);
+        }
+        silentStart = -1;
+      }
+    }
+    if (!cuts.length) return file;
+    const removedSamples = cuts.reduce((total, [start, end]) => total + end - start, 0);
+    const pcm = new Uint8Array((buffer.length - removedSamples) * 2);
+    const view = new DataView(pcm.buffer);
+    let outputSample = 0;
+    let cutIndex = 0;
+    for (let sample = 0; sample < buffer.length; sample++) {
+      const cut = cuts[cutIndex];
+      if (cut && sample >= cut[0] && sample < cut[1]) continue;
+      if (cut && sample >= cut[1]) cutIndex++;
+      let value = 0;
+      for (let channel = 0; channel < buffer.numberOfChannels; channel++) value += buffer.getChannelData(channel)[sample] || 0;
+      value = Math.max(-1, Math.min(1, value / Math.max(1, buffer.numberOfChannels)));
+      view.setInt16(outputSample * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+      outputSample++;
+    }
+    return new File([makeWav([pcm], sampleRate)], file.name, { type: "audio/wav" });
+  } finally {
+    await audioContext.close();
+  }
+}
+
 function clock(seconds: number) {
   const value = Math.max(0, Math.round(seconds));
   return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
@@ -644,7 +692,7 @@ export default function Home() {
           const blob = await readVoiceResponse(response);
           if (!blob.size) throw new Error("Сервис вернул пустую аудиодорожку");
           const rawFile = new File([blob], `gemini-${voice.toLowerCase()}.wav`, { type: blob.type || "audio/wav" });
-          return VOICE_TEMPO === 1 ? rawFile : slowVoiceFile(rawFile);
+          return VOICE_TEMPO === 1 ? tightenLongVoicePauses(rawFile) : slowVoiceFile(rawFile);
         } catch (error) {
           lastError = error instanceof Error ? error.message : "Gemini не вернула аудиодорожку";
           continue;
@@ -748,7 +796,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `natural-achird-v19:gemini-3.1-expressive-tags:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `natural-achird-v21:gemini-3.1-tight-natural-pauses:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
