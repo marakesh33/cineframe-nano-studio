@@ -37,10 +37,10 @@ const STYLE_REFERENCE_PATHS = [
 ];
 
 const VOICES = [
-  { id: "Gacrux", label: "Голос «Богатство — это просто» · Gemini Gacrux" },
+  { id: "Gacrux", label: "Gacrux · прежний голос Gemini · темп 0,8×" },
 ];
 
-const DEFAULT_VOICE_DIRECTION = `Use Gacrux as a native Russian male narrator, approximately 35–50 years old, with the same overall character as the supplied Qwen reference but cleaner and more natural: a deep warm chest baritone, slightly textured and faintly husky, close-microphone presence, calm intelligence, restrained confidence and a serious psychological-documentary mood. Pronounce every Russian word and stress correctly, keep consonants clear without sounding over-articulated, and preserve subtle human breaths and tiny variations in emphasis. The voice must sound continuous and human: no metallic resonance, digital warble, doubled syllables, broken words, missing endings, unnatural stress, sudden pitch jumps or robotic rhythm. Hold a measured cadence of 108–114 words per minute before the final 0.8 tempo treatment. Use short sentence pauses of about 0.25–0.45 seconds and paragraph pauses no longer than 0.7 seconds. The first sentence is a firm intimate hook; contrasts receive subtle confident emphasis. Avoid advertising enthusiasm, theatrical acting, whispering, singing, exaggerated emotion, stretched vowels and dramatic silence. Read the supplied script verbatim without adding or removing words.`;
+const DEFAULT_VOICE_DIRECTION = `Match the narrator from the reference video «Богатство — это просто. Но жестоко» as closely as possible. Use the Gacrux voice as a native Russian male narrator, 40–55 years old: deep warm mature baritone, calm authority, intelligent and emotionally restrained. Hold a continuous measured cadence of 108–114 words per minute, targeting exactly 111. Use short natural sentence pauses of about 0.25–0.45 seconds and paragraph pauses no longer than 0.7 seconds. Never stretch vowels, slow down meditatively or insert dramatic silence. The first sentence is a firm, clear hook; contrasts receive subtle confident emphasis. Avoid advertising enthusiasm, theatrical acting, whispering, singing, exaggerated emotion and robotic rhythm. Read the supplied script verbatim without adding or removing words.`;
 const POPULAR_VOICE_WPM = 106;
 const VOICE_TEMPO = 0.8;
 const VOICE_CHUNK_PAUSE_SECONDS = 0.35;
@@ -748,7 +748,7 @@ export default function Home() {
       const chunkWords = chunks[index].split(/\s+/).filter(Boolean).length;
       const isOpeningChunk = hasOpeningChunk && index === 0;
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 8, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `wealth-simple-voice-v11:gemini-2.5-tempo-0.8:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `wealth-simple-voice-v12:gemini-2.5-original-tempo-0.8:${voice}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
