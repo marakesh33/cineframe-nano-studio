@@ -119,7 +119,7 @@ export async function POST(request: Request) {
 
     const voice = ALLOWED_VOICES.has(body.voice || "") ? body.voice : "Charon";
     if (!apiKey) return Response.json({ error: "Нужен Google API key" }, { status: 400 });
-    const direction = body.direction?.trim() || "Use Charon as a natural native Russian male speaker, approximately 35–50 years old. Speak as if explaining an important idea to one person in a quiet room, not as a commercial announcer or an AI audiobook voice. Keep a warm grounded chest tone, relaxed consonants, subtle human breaths, small natural variations in pace and understated emotion. Maintain a continuous conversational cadence around 105–112 words per minute. Use short natural pauses, but never add dramatic silence or stretch vowels. Begin confidently without raising the volume. Avoid theatrical narration, trailer voice, motivational advertising, exaggerated gravitas, whispering, singing, perfectly uniform rhythm and over-articulation.";
+    const direction = body.direction?.trim() || "Use Charon as a native Russian man speaking privately to one listener, not recording a voice-over. Sound thoughtful, relaxed and present. Keep the warm chest tone, but remove polished announcer delivery: vary sentence rhythm slightly, let emphasis follow meaning, soften some unstressed syllables and sentence endings, and allow tiny natural breaths between thoughts. Do not give every phrase the same melody or weight. The opening should feel spontaneous and quietly confident, not performed. Keep an average pace near 108 words per minute without metronomic timing. Avoid audiobook cadence, motivational advertising, theatrical gravity, exaggerated diction, artificial rasp, whispering, stretched vowels, deliberate filler words and dramatic pauses. Preserve clear Russian pronunciation.";
     const desiredSeconds = Number.isFinite(body.desiredSeconds) ? Math.max(0, Math.min(600, Math.round(body.desiredSeconds || 0))) : 0;
     const previousSeconds = Number.isFinite(body.previousSeconds) ? Math.max(0, Math.round(body.previousSeconds || 0)) : 0;
     const timing = desiredSeconds
@@ -133,6 +133,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
+            temperature: 0.85,
             responseModalities: ["AUDIO"],
             speechConfig: {
               languageCode: "ru-RU",
@@ -174,8 +175,9 @@ export async function POST(request: Request) {
         headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseModalities: ["AUDIO"],
+        generationConfig: {
+          temperature: 0.85,
+          responseModalities: ["AUDIO"],
             speechConfig: {
               languageCode: "ru-RU",
               voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } },
