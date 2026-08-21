@@ -48,8 +48,9 @@ export async function POST(request: Request) {
       .map((image) => ({ type: "image", data: image.data!, mime_type: image.mime_type! }));
     const sceneId = Math.max(1, Math.round(body.sceneId || 1));
     const visualRole = VISUAL_ROLES[(sceneId - 1) % VISUAL_ROLES.length];
-    const promptLower = body.prompt.toLocaleLowerCase("ru");
-    const explicitlySeated = /\b(сидит|сидящий|сидя|кресл|диван|стул|кровать|постел)\w*/u.test(promptLower);
+    const styleMarker = body.prompt.toLocaleLowerCase("ru").indexOf("cinematic oil-painting style");
+    const sceneContent = styleMarker >= 0 ? body.prompt.slice(0, styleMarker) : body.prompt;
+    const explicitlySeated = /(?:^|[^а-яёa-z])(сидит|сидящ|сидя|кресл|диван|стул|кроват|постел|sitting|seated|chair|armchair|sofa|bed)(?:[а-яёa-z]*)/iu.test(sceneContent);
     const seatedRule = explicitlySeated
       ? "The narration explicitly requests a seated setting, so it is allowed only for this frame; still avoid copying the reference pose or room."
       : "STRICT: no seated person, chair, armchair, sofa, bed, passive desk portrait or man staring through a window in this frame.";
