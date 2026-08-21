@@ -28,9 +28,10 @@ type Scene = {
 
 type PipelineStage = "idle" | "voice" | "frames" | "render" | "done" | "error";
 
-const DEFAULT_STYLE = `cinematic oil-painting style matching the supplied channel reference, unmistakably hand-painted rather than photographic, dense broad visible brushstrokes and soft impasto texture across the entire frame, gently simplified faces and objects, softened contours, low microcontrast, smoky atmospheric depth and restrained analog grain, dark teal and petrol-blue interiors with readable shadow detail, vivid crimson-red rain reflections and warm amber practical light used as controlled accents, contemplative psychological mood, lonely thoughtful human figures shown naturally from the side or three-quarter view, dark but never underexposed, cinematic 16:9 widescreen composition, no sharp modern digital detail, no glossy CGI, no hyperreal skin, no clean vector edges, no neon cyberpunk look, no text, no subtitles, no logo, no watermark`;
+const DEFAULT_STYLE = `cinematic oil-painting style matching the supplied channel references, unmistakably hand-painted rather than photographic, dense broad visible brushstrokes and soft impasto texture across the entire frame, gently simplified faces and objects, softened contours, low microcontrast, smoky atmospheric depth and restrained analog grain, deep teal and petrol-blue shadows with readable detail, vivid crimson-red atmospheric light and warm amber accents, dark but never underexposed, cinematic 16:9 widescreen composition. Build a varied story-driven sequence instead of a portrait series: alternate people performing clear actions, expressive hands and useful objects, two-person or group interactions, architecture, city exteriors, landscapes, symbolic still lifes and environment-only frames. Human presence is optional and must serve the spoken idea. Never default to the same lonely seated man, the same room, bed, chair, desk or window across neighboring frames. No sharp modern digital detail, no glossy CGI, no hyperreal skin, no clean vector edges, no neon cyberpunk look, no text, no subtitles, no logo, no watermark`;
 
 const STYLE_REFERENCE_PATHS = [
+  "/style-references/psychology-style-old-soft.jpg",
   "/style-references/psychology-style-user-target.png",
 ];
 
@@ -398,8 +399,19 @@ function shotDescription(direction: string, index: number, fragment: string) {
     if (match && Number(match[1]) === index + 1) return match[2].replace(/[. ]+$/, "");
   }
   if (direction.trim() && !containsNumberedScenes) return `A concrete cinematic scene illustrating the idea "${fragment}", following this story direction: ${direction.trim()}`;
-  const naturalShot = index % 6 === 0 ? "a calm wide establishing composition" : index % 6 === 3 ? "a closer emotional composition" : "a natural medium cinematic composition";
-  return `Create one concrete narrative illustration that directly visualizes this exact voiceover fragment: "${fragment}". First identify the central human subject, then show a clear physical action, a believable location and only the objects needed to communicate the meaning. Use ${naturalShot} while maintaining continuity with neighboring scenes. Prefer literal cause-and-effect storytelling over vague symbols. Do not invent an unrelated office portrait, random philosopher, decorative statue, raven or abstract object unless the quoted narration genuinely requires it`;
+  const visualRole = [
+    "a close detail of hands performing a meaningful action with one important object; do not show a seated portrait",
+    "a wide environment-first frame built around architecture, a street, transport or landscape; no dominant person",
+    "two or more people interacting, negotiating, helping, confronting or moving through a real situation",
+    "a full-body person actively walking, building, choosing, opening, carrying or leaving; the person must be standing or in motion",
+    "a concrete symbolic still life made from physical objects named or strongly implied by the narration; no people",
+    "an active work or decision scene using tools, documents, plans, technology or machinery; never passive posing",
+    "an exterior city, nature or architectural image with a small human silhouette only if scale helps the idea",
+    "an over-the-shoulder action composition where the subject changes something in the world rather than merely thinking",
+    "a social contrast with several distinct people at different distances, avoiding a centered hero portrait",
+    "an atmospheric location-only image where lighting, weather and one concrete trace of human activity tell the story",
+  ][index % 10];
+  return `Create one concrete narrative illustration that directly visualizes this exact voiceover fragment: "${fragment}". The assigned visual role for this frame is ${visualRole}. Choose a believable location and only the people, action and objects needed to communicate the current sentence. Change the subject, posture and setting from neighboring frames by default; palette continuity is enough. Prefer literal cause-and-effect storytelling over vague symbols. Do not invent an unrelated office portrait, random philosopher, decorative statue, raven or abstract object unless the quoted narration genuinely requires it`;
 }
 
 function cleanSceneDescription(value: string) {
@@ -422,7 +434,7 @@ function splitIntoScenes(text: string, count: number, duration: number, style: s
     const fragment = words.slice(from, to).join(" ") || words[index % Math.max(1, words.length)] || direction || "Визуальная сцена";
     const describedScene = cleanSceneDescription(shotDescription(direction, index, fragment));
     const scenePrompt = index === 0
-      ? `OPENING HOOK FRAME — make this image noticeably more thoughtful and psychologically intriguing than the remaining sequence. Show one main person caught in a quiet moment of realization just before an important decision: pensive indirect gaze, restrained tension in the face and hands, expressive silhouette, meaningful negative space and one unanswered visual question. Avoid a generic action collage, a smiling presenter or a busy crowd. Directly connect the emotion and setting to the opening hook. ${describedScene}`
+      ? `OPENING HOOK FRAME — make this image noticeably more thoughtful and psychologically intriguing than the remaining sequence. Show one main person standing, walking or pausing mid-action at the instant of a realization: pensive indirect gaze, restrained tension in the face and hands, expressive full or three-quarter silhouette, meaningful negative space and one unanswered visual question. No seated pose, chair, sofa, bed, desk or passive man staring through a window unless the spoken text explicitly requires it. Avoid a generic collage, a smiling presenter or a busy crowd. Directly connect the action and setting to the opening hook. ${describedScene}`
       : describedScene;
     return {
       id: index + 1,
