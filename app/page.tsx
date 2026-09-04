@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, StreamTarget, type StreamTargetChunk } from "mediabunny";
+import { AudioBufferSource, BufferTarget, CanvasSource, MovOutputFormat, Output, Quality, StreamTarget, type StreamTargetChunk } from "mediabunny";
 import { SimpleFilter, SoundTouch, WebAudioBufferSource } from "soundtouchjs";
 import { addProjectToCapCut } from "./capcut-export";
 import {
@@ -28,7 +28,7 @@ type Scene = {
 
 type PipelineStage = "idle" | "voice" | "frames" | "render" | "done" | "error";
 
-const DEFAULT_STYLE = `cinematic oil-painting style matching the supplied channel references, unmistakably hand-painted rather than photographic, dense broad visible brushstrokes and soft impasto texture across the entire frame, gently simplified faces and objects, softened contours, low microcontrast, smoky atmospheric depth and restrained analog grain, deep teal and petrol-blue shadows with readable detail, vivid crimson-red atmospheric light and warm amber accents, dark but never underexposed, cinematic 16:9 widescreen composition. Build a varied story-driven sequence instead of a portrait series: alternate people performing clear actions, expressive hands and useful objects, two-person or group interactions, architecture, city exteriors, landscapes, symbolic still lifes and environment-only frames. Human presence is optional and must serve the spoken idea. Never default to the same lonely seated man, the same room, bed, chair, desk or window across neighboring frames. No sharp modern digital detail, no glossy CGI, no hyperreal skin, no clean vector edges, no neon cyberpunk look, no text, no subtitles, no logo, no watermark`;
+const DEFAULT_STYLE = `cinematic oil-painting style matching the supplied channel references, unmistakably hand-painted rather than photographic, dense broad visible brushstrokes and soft impasto texture across the entire frame, gently simplified faces and objects, softened contours, low microcontrast, smoky atmospheric depth and restrained analog grain, deep teal and petrol-blue shadows with readable detail, vivid crimson-red atmospheric light and warm amber accents. Keep the exposure about ten to fifteen percent brighter than a very dark cinematic frame: luminous faces and midtones, readable background detail, controlled blacks without crushed shadows, never muddy or underexposed. Cinematic 16:9 widescreen composition. Build a varied story-driven sequence instead of a portrait series: alternate people performing clear actions, expressive hands and useful objects, two-person or group interactions, architecture, city exteriors, landscapes, symbolic still lifes and environment-only frames. Human presence is optional and must serve the spoken idea. Never default to the same lonely seated man, the same room, bed, chair, desk or window across neighboring frames. No sharp modern digital detail, no glossy CGI, no hyperreal skin, no clean vector edges, no neon cyberpunk look, no text, no subtitles, no logo, no watermark`;
 
 const STYLE_REFERENCE_PATHS = [
   "/style-references/psychology-style-old-soft.jpg",
@@ -41,37 +41,86 @@ const QWEN_LOCAL_PROFILE_ID = "6c7a7827-0001-461e-a50e-5703d42c0b54";
 const QWEN_REFERENCE_FILE = "/wealth-simple-voice-reference-clean.wav";
 const QWEN_EMBEDDING_STORAGE_KEY = "cineframe_fal_qwen_embedding_v1";
 const QWEN_REQUEST_CHARS = 650;
-const GEMINI_REQUEST_CHARS = 520;
-const VOICE_REVISION = 8;
+const GEMINI_REQUEST_CHARS = 650;
+const VOICE_REVISION = 21;
+const LOCAL_RVC_ENDPOINT = "http://127.0.0.1:7871";
 const QWEN_REFERENCE_TEXT = `Начнем с правды, которую мало кто хочет слышать — разбогатеть несложно.
 Людям нравится думать иначе. Они рассуждают об этом так, будто существует тайная формула, спрятанная в древних трактатах, или доступная лишь избранным.
 Но реальность гораздо проще.`;
 
 const VOICES = [
-  { id: "Algieba", label: "Основной голос · мягкий живой мужской Gemini" },
+  { id: "Achird", label: "Чистый живой голос · Gemini Achird" },
+  { id: "AchirdCalm", label: "Спокойный живой голос · Gemini Achird (чуть глубже)" },
+  { id: "AchirdMature", label: "Зрелый спокойный голос · Gemini Achird (около 40 лет)" },
+  { id: "CharonSoft", label: "Мягкий живой голос · Gemini Charon (слегка легче)" },
+  { id: "Charon", label: "Глубокий спокойный голос · Gemini Charon (старый)" },
 ];
 
 function isQwenCloneVoice(voiceId: string) {
   return voiceId === QWEN_LOCAL_CLONE_ID || voiceId === QWEN_CLOUD_CLONE_ID;
 }
 
-const DEFAULT_VOICE_DIRECTION = `# AUDIO PROFILE
-Nikolai is a native Russian man in his early thirties speaking in his own words, not performing a prepared voice-over. His voice is warm, clear and naturally medium-light — never artificially deep. He sounds intelligent, attentive and emotionally present, with small human variations rather than studio-perfect uniformity.
+const DEFAULT_VOICE_DIRECTION = `You are Nikolai, a native Russian man in his early thirties. Use Gemini Achird's clean, warm, naturally medium male voice. Do not lower it for authority and do not make it sound like a studio narrator.
+
+Speak as if you are sending a thoughtful voice message to one familiar person. Use ordinary contemporary Russian, a calm natural tempo and clear relaxed diction. Follow the meaning of the complete thought. Give important words mild attention, while small connecting words remain light. Let sentences flow normally; pause only where a real speaker needs to breathe or where the idea changes.
+
+Keep the performance clean and emotionally alive but understated. No acting, performed hesitations, artificial breaths, dramatic hook delivery, solemnity, whispering or forced friendliness. Never use a fixed rhythm, identical pauses, repeated falling endings, stretched vowels, swallowed endings or robotic precision. Read the supplied text verbatim without adding, removing or paraphrasing words.`;
+
+const ACHIRD_CALM_VOICE_DIRECTION = `You are Nikolai, a native Russian man in his early thirties. Use Gemini Achird's clean and warm timbre in a calm natural medium-low register. Keep the familiar living Achird character, making it only slightly deeper and more composed — about five percent lower in perceived weight, never a heavy baritone.
+
+Speak as if you are having an unhurried private conversation with one familiar person. Use ordinary contemporary Russian, relaxed clear diction and a steady meaning-led flow. Let the voice feel grounded and confident, with gentle emotional presence. Pause only where the thought changes or a real speaker naturally needs a short breath.
+
+Never force bass, solemnity, authority or a dark trailer tone. Do not whisper, act, perform hesitations, add artificial breaths, stretch vowels, swallow endings or repeat the same falling melody. Keep it human, clean and calm rather than polished like an announcer. Read the supplied text verbatim without adding, removing or paraphrasing words.`;
+
+const ACHIRD_MATURE_VOICE_DIRECTION = `You are Nikolai, a native Russian man around forty years old. Use Gemini Achird's clean warm timbre as a mature, experienced adult speaking in his own words. The voice is naturally medium-low, steady and composed, with a little age and weight in the resonance, but never artificially bass-heavy, elderly or stern.
+
+Speak to one familiar person in ordinary contemporary Russian. Sound thoughtful and self-assured because you understand the subject, not because you are performing authority. Use an unhurried conversational flow, relaxed clear diction and short natural pauses only when the idea changes. Keep subtle human warmth and restrained emotion.
+
+Never sound like a young presenter, trailer narrator, audiobook actor, professor or synthetic assistant. Do not force a dark tone, whisper, overact, add deliberate breaths, stretch vowels, swallow endings or repeat the same downward cadence. Pronounce every Russian word completely: never merge neighboring words, replace syllables, simplify a difficult word or sacrifice diction to match a target duration. Read the supplied text verbatim without adding, removing or paraphrasing words.`;
+
+const CHARON_VOICE_DIRECTION = `# AUDIO PROFILE
+Nikolai is a native Russian man in his late thirties with a naturally deep, warm Charon baritone. The depth comes from his real timbre, not from forced bass, sternness or a trailer effect. He sounds calm, intelligent, confident and emotionally present.
 
 # THE SCENE
-Nikolai is talking quietly to one interested person in a comfortable room. He understands each idea before saying it. The microphone is close, but this still feels like a genuine conversation, not narration from a booth.
+Nikolai is speaking to one interested person in a quiet room. The microphone is close. This is a genuine thoughtful conversation, not an announcer recording, audiobook or dramatic performance.
 
 # DIRECTOR'S NOTES
-Speak natural contemporary Russian at a calm conversational pace. Let meaning control rhythm instead of punctuation. Move lightly through setup words, let an occasional simple phrase come a little faster, and slow only around a genuinely important realization. Connect related sentences as one thought; do not restart the voice after every full stop. Use short pauses inside a thought, a slightly longer pause only when the idea truly changes, and never leave identical gaps between sentences. Vary sentence melody: some endings may settle gently, others remain open and lead into the next sentence. Begin softly at normal volume, as if the conversation has already started. Keep diction clear but relaxed; do not over-articulate consonants. Use restrained curiosity, recognition, concern and warmth only where the meaning calls for them. Any breathing must be quiet and incidental, never inserted as an effect. Preserve tiny natural changes of energy and timing, including an occasional brief thinking beat before an important clause.
+Speak natural contemporary Russian at an unhurried conversational pace. Begin gently at normal volume without punching the first word. Understand each complete thought before saying it. Keep small human changes in timing, melody and energy; use short meaningful pauses, never identical pauses after every sentence. Pronounce endings and Russian stresses clearly without becoming formal or over-articulated. Let serious moments remain warm and human. A faint natural breath is acceptable.
 
-Never sound like an announcer, trailer narrator, meditation app, audiobook actor or synthetic assistant. No fixed cadence, metronomic pauses, repeated downward endings, grave authority, theatrical emphasis, whispering, stretched vowels, exaggerated breaths or audible performance tags. Do not make every sentence equally important. Read the supplied Russian script verbatim without adding, removing or paraphrasing words.`;
-const POPULAR_VOICE_WPM = 129;
+Never sound robotic, grave, commanding, theatrical, sleepy or whispered. Do not force the voice lower than Charon's natural register. No trailer delivery, fixed cadence, repeated downward endings, stretched vowels, exaggerated emotion or performance tags. Read the supplied Russian script verbatim without adding, removing or paraphrasing words.`;
+
+const CHARON_SOFT_VOICE_DIRECTION = `# AUDIO PROFILE
+Nikolai is a native Russian man in his mid-thirties speaking with Gemini Charon's warm timbre in its natural low register. Keep the familiar deep Charon character, making it only three to four percent lighter and very slightly higher. Do not turn it into a medium or high voice. There must be no forced sub-bass, chesty rumble, stern gravity or trailer resonance. He sounds calm, friendly, intelligent and fully human.
+
+# THE SCENE
+Nikolai is explaining an interesting idea to one familiar person in a quiet room. The microphone is close, but this is an ordinary sincere conversation rather than a studio performance.
+
+# DIRECTOR'S NOTES
+Speak natural contemporary Russian at a relaxed conversational pace. Begin gently and lightly at normal volume. Let intonation follow meaning, with small human changes in pace, melody and energy. Use short natural pauses only where the thought needs them. Keep endings clear and stresses correct without formal over-articulation. Maintain warmth and quiet confidence, but never lower the pitch for authority.
+
+Never sound deep on purpose, robotic, grave, commanding, theatrical, whispered, sleepy, like an announcer, trailer narrator or audiobook actor. No fixed cadence, repeated downward endings, stretched vowels, exaggerated breaths or performance tags. Read the supplied Russian script verbatim without adding, removing or paraphrasing words.`;
+
+function voiceDirectionFor(voiceId: string) {
+  if (voiceId === "AchirdMature") return ACHIRD_MATURE_VOICE_DIRECTION;
+  if (voiceId === "AchirdCalm") return ACHIRD_CALM_VOICE_DIRECTION;
+  if (voiceId === "CharonSoft") return CHARON_SOFT_VOICE_DIRECTION;
+  return voiceId === "Charon" ? CHARON_VOICE_DIRECTION : DEFAULT_VOICE_DIRECTION;
+}
+
+function engineVoiceFor(voiceId: string) {
+  if (voiceId === "AchirdMature") return "Achird";
+  if (voiceId === "AchirdCalm") return "Achird";
+  return voiceId === "CharonSoft" ? "Charon" : voiceId;
+}
+const POPULAR_VOICE_WPM = 115;
 const VOICE_TEMPO = 1;
-const VOICE_PREVIEW_TEXT = "Иногда одна мысль меняет всё. Но самое важное мы замечаем только тогда, когда перестаём спешить.";
+const VOICE_PREVIEW_TEXT = "Бедность делает человека предсказуемым. Но финансовая свобода начинается тогда, когда страх больше не принимает решения за тебя.";
 const SHORTS_OUTRO = "Здесь — суть за минуту. На основном канале — то, что действительно меняет мышление.";
 const SCENE_SECONDS = 10;
-const LONG_OPENING_HOOK_SECONDS = 20;
+const LONG_OPENING_HOOK_SECONDS = 10;
 const CROSSFADE_SECONDS = 0.35;
+const STORY_RESET_EVERY_SCENES = 8;
+const LONG_TILT_DEGREES = 0.9;
 
 type StyleReference = { data: string; mime_type: string };
 let styleReferencePromise: Promise<StyleReference[]> | null = null;
@@ -325,15 +374,28 @@ function estimateOpeningQuoteDuration(text: string) {
 }
 
 function voiceTextForScript(text: string, includeShortsOutro = false) {
-  const voiceText = text;
+  const voiceText = text
+    .replace(/не в собеседнике, а в самом себе/giu, "не в другом человеке — а в себе")
+    .replace(/([.!?…])\s+(?=[А-ЯЁ«])/gu, "$1\n\n");
   if (!includeShortsOutro || voiceText.includes(SHORTS_OUTRO)) return voiceText;
   return `${voiceText.trim()}\n\n${SHORTS_OUTRO}`;
 }
 
 const RUSSIAN_VOICE_STRESSES: Array<[string, string]> = [
+  ["предсказуемым", "предсказу́емым"], ["предсказуемого", "предсказу́емого"], ["предсказуемая", "предсказу́емая"], ["предсказуемый", "предсказу́емый"], ["предсказуема", "предсказу́ема"],
+  ["завтрашний", "за́втрашний"], ["завтрашнего", "за́втрашнего"], ["завтрашнем", "за́втрашнем"], ["завтрашняя", "за́втрашняя"],
+  ["платежа", "платежа́"], ["платежей", "платеже́й"], ["платежом", "платежо́м"], ["платежи", "платежи́"],
+  ["суммой", "су́ммой"], ["суммами", "су́ммами"], ["сумму", "су́мму"], ["суммы", "су́ммы"], ["сумма", "су́мма"],
+  ["унизительного", "унизи́тельного"], ["унизительным", "унизи́тельным"], ["унизительный", "унизи́тельный"],
+  ["суверенитет", "суверените́т"], ["суверенитета", "суверените́та"], ["суверенитетом", "суверените́том"],
+  ["ликвидность", "ликви́дность"], ["ликвидности", "ликви́дности"],
+  ["неопределенность", "неопределённость"], ["неопределенности", "неопределённости"],
+  ["непредвиденный", "непредви́денный"], ["непредвиденного", "непредви́денного"],
+  ["финансовая", "фина́нсовая"], ["финансовый", "фина́нсовый"], ["финансового", "фина́нсового"], ["финансовым", "фина́нсовым"], ["финансовой", "фина́нсовой"],
+  ["собеседнике", "собесе́днике"], ["собеседником", "собесе́дником"], ["собеседника", "собесе́дника"], ["собеседник", "собесе́дник"],
   ["договоров", "догово́ров"], ["договором", "догово́ром"], ["договоры", "догово́ры"], ["договор", "догово́р"],
-  ["обеспечения", "обеспече́ния"], ["обеспечение", "обеспече́ние"], ["обеспечением", "обеспече́нием"],
-  ["намерения", "намере́ния"], ["намерение", "намере́ние"], ["намерением", "намере́нием"],
+  ["обеспечения", "обеспе́чения"], ["обеспечение", "обеспе́чение"], ["обеспечением", "обеспе́чением"],
+  ["намерения", "наме́рения"], ["намерение", "наме́рение"], ["намерением", "наме́рением"],
   ["процентов", "проце́нтов"], ["проценты", "проце́нты"], ["процентами", "проце́нтами"],
   ["разбогатеть", "разбогате́ть"], ["богатство", "бога́тство"], ["богатства", "бога́тства"],
   ["бедность", "бе́дность"], ["бедности", "бе́дности"], ["деньгами", "де́ньгами"],
@@ -398,7 +460,9 @@ function shotDescription(direction: string, index: number, fragment: string) {
     if (match) containsNumberedScenes = true;
     if (match && Number(match[1]) === index + 1) return match[2].replace(/[. ]+$/, "");
   }
-  if (direction.trim() && !containsNumberedScenes) return `A concrete cinematic scene illustrating the idea "${fragment}", following this story direction: ${direction.trim()}`;
+  const generalDirection = direction.trim() && !containsNumberedScenes
+    ? `Follow this overall story direction while keeping the current frame concrete and visually distinct: ${direction.trim()}.`
+    : "";
   const visualRole = [
     "a close detail of hands performing a meaningful action with one important object; do not show a seated portrait",
     "a wide environment-first frame built around architecture, a street, transport or landscape; no dominant person",
@@ -411,7 +475,10 @@ function shotDescription(direction: string, index: number, fragment: string) {
     "a social contrast with several distinct people at different distances, avoiding a centered hero portrait",
     "an atmospheric location-only image where lighting, weather and one concrete trace of human activity tell the story",
   ][index % 10];
-  return `Create one concrete narrative illustration that directly visualizes this exact voiceover fragment: "${fragment}". The assigned visual role for this frame is ${visualRole}. Choose a believable location and only the people, action and objects needed to communicate the current sentence. Change the subject, posture and setting from neighboring frames by default; palette continuity is enough. Prefer literal cause-and-effect storytelling over vague symbols. Do not invent an unrelated office portrait, random philosopher, decorative statue, raven or abstract object unless the quoted narration genuinely requires it`;
+  const storyReset = index >= 2 && (index - 2) % STORY_RESET_EVERY_SCENES === 0
+    ? "STORY RESET: introduce a new concrete conflict, question or mini-story with a visibly different person, age, location and camera distance. The image must feel like a new chapter while preserving the palette."
+    : "";
+  return `${storyReset} ${generalDirection} Create one concrete narrative illustration that directly visualizes this exact voiceover fragment: "${fragment}". The assigned visual role for this frame is ${visualRole}. Choose a believable location and only the people, action and objects needed to communicate the current sentence. Change the subject, posture and setting from neighboring frames by default; also vary age and camera distance. Palette continuity is enough. Prefer literal cause-and-effect storytelling over vague symbols. Do not invent an unrelated office portrait, random philosopher, decorative statue, raven or abstract object unless the quoted narration genuinely requires it`;
 }
 
 function cleanSceneDescription(value: string) {
@@ -434,8 +501,10 @@ function splitIntoScenes(text: string, count: number, duration: number, style: s
     const fragment = words.slice(from, to).join(" ") || words[index % Math.max(1, words.length)] || direction || "Визуальная сцена";
     const describedScene = cleanSceneDescription(shotDescription(direction, index, fragment));
     const scenePrompt = index === 0
-      ? `OPENING HOOK FRAME — make this image noticeably more thoughtful and psychologically intriguing than the remaining sequence. Show one main person standing, walking or pausing mid-action at the instant of a realization: pensive indirect gaze, restrained tension in the face and hands, expressive full or three-quarter silhouette, meaningful negative space and one unanswered visual question. No seated pose, chair, sofa, bed, desk or passive man staring through a window unless the spoken text explicitly requires it. Avoid a generic collage, a smiling presenter or a busy crowd. Directly connect the action and setting to the opening hook. ${describedScene}`
-      : describedScene;
+      ? `OPENING HOOK FRAME 1 OF 2 — show the painful visual contradiction behind the opening words in one instantly understandable scene. Make it psychologically tense and impossible to ignore: one decisive action or consequence, a pensive indirect gaze, expressive hands, meaningful negative space and one unanswered visual question. No seated pose, chair, sofa, bed, desk or passive man staring through a window unless the spoken text explicitly requires it. Avoid a generic collage, smiling presenter or decorative symbolism. ${describedScene}`
+      : index === 1
+        ? `OPENING HOOK FRAME 2 OF 2 — reveal the unexpected cause, hidden mechanism or promised way out from frame one. Use a clearly different composition, camera distance, action and location from the first image so the first twenty seconds feel like progression rather than repetition. Keep one strong focal point and directly visualize the next spoken claim. ${describedScene}`
+        : describedScene;
     return {
       id: index + 1,
       start,
@@ -475,7 +544,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [isGeneratingVoicePreview, setIsGeneratingVoicePreview] = useState(false);
-  const [voice, setVoice] = useState("Algieba");
+  const [voice, setVoice] = useState("Achird");
   const [voiceDirection, setVoiceDirection] = useState(DEFAULT_VOICE_DIRECTION);
   const [voicePreviewUrl, setVoicePreviewUrl] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -492,6 +561,7 @@ export default function Home() {
   const voicePreviewRef = useRef<HTMLAudioElement>(null);
   const keyCursorRef = useRef(0);
   const voiceChunkCacheRef = useRef(new Map<string, File>());
+  const restoredVoiceRevisionRef = useRef(VOICE_REVISION);
   const checkpointIdRef = useRef(crypto.randomUUID());
   const checkpointReadyRef = useRef(false);
   const [checkpointStatus, setCheckpointStatus] = useState("Включаю автосохранение…");
@@ -518,19 +588,17 @@ export default function Home() {
         checkpointIdRef.current = checkpoint.checkpointId;
         setScript(checkpoint.script);
         setDirection(checkpoint.direction);
-        setStyle(!checkpoint.style || checkpoint.style.includes("hyper-detailed realism") ? DEFAULT_STYLE : checkpoint.style);
+        setStyle(DEFAULT_STYLE);
         setTargetDuration(checkpoint.targetDuration);
         setDurationMinutesInput(checkpoint.durationMinutesInput);
         setQuality(checkpoint.quality === "1K" ? "2K" : checkpoint.quality || "2K");
         setAspect(checkpoint.aspect);
         const restoredAudioSource = checkpoint.audioSource || (checkpoint.audioName.startsWith("gemini-") ? "generated" : "uploaded");
-        const restoredVoice = "Algieba";
-        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && (
-          checkpoint.voice !== "Algieba"
-          || (checkpoint.voiceRevision || 0) < VOICE_REVISION
-        );
+        const restoredVoice = VOICES.some((item) => item.id === checkpoint.voice) ? checkpoint.voice : "Achird";
+        const legacyVoiceNeedsRefresh = restoredAudioSource === "generated" && !VOICES.some((item) => item.id === checkpoint.voice);
+        restoredVoiceRevisionRef.current = checkpoint.voiceRevision || VOICE_REVISION;
         setVoice(restoredVoice);
-        setVoiceDirection(DEFAULT_VOICE_DIRECTION);
+        setVoiceDirection(checkpoint.voiceDirection || voiceDirectionFor(restoredVoice));
         setScenes(savedScenes as Scene[]);
         setSelectedId(savedScenes[0]?.id || null);
         setAudioDuration(legacyVoiceNeedsRefresh ? 0 : checkpoint.audioDuration);
@@ -545,12 +613,13 @@ export default function Home() {
           setAudioName(restoredAudio.name);
           setAudioUrl(URL.createObjectURL(restoredAudio));
         }
-        if (savedVideo && !legacyVoiceNeedsRefresh && checkpoint.quality !== "1K") {
+        const savedVideoIsMov = checkpoint.videoFormat === "mov" && savedVideo?.type === "video/quicktime";
+        if (savedVideo && savedVideoIsMov && !legacyVoiceNeedsRefresh && checkpoint.quality !== "1K") {
           setVideoBlob(savedVideo);
           setVideoUrl(URL.createObjectURL(savedVideo));
         }
         const restoredDone = savedScenes.filter((scene) => scene.status === "done").length;
-        if (savedVideo && !legacyVoiceNeedsRefresh && checkpoint.quality !== "1K" && checkpoint.pipelineStage === "done") {
+        if (savedVideo && savedVideoIsMov && !legacyVoiceNeedsRefresh && checkpoint.quality !== "1K" && checkpoint.pipelineStage === "done") {
           setPipelineStage("done");
           setPipelineProgress(100);
           setPipelineLabel("Готовое видео восстановлено из автосохранения");
@@ -597,6 +666,7 @@ export default function Home() {
         fitVoiceToVideo,
         referenceVideoName,
         voiceRevision: VOICE_REVISION,
+        videoFormat: "mov",
         scenes: scenes.map(({ image: _image, ...scene }) => scene),
         pipelineStage,
         pipelineProgress,
@@ -648,7 +718,8 @@ export default function Home() {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
     setVoice(nextVoice);
-    setVoiceDirection(DEFAULT_VOICE_DIRECTION.replace(/\bAlgieba\b/g, nextVoice));
+    restoredVoiceRevisionRef.current = VOICE_REVISION;
+    setVoiceDirection(voiceDirectionFor(nextVoice));
     setAudioDuration(0);
     setAudioFile(null);
     setAudioUrl("");
@@ -683,7 +754,7 @@ export default function Home() {
       }
       setMessage(fitVoiceToVideo
         ? `Озвучка готова и точно подогнана под видео: ${clock(exactDuration)}.`
-        : `Озвучка готова: ${clock(exactDuration)}. Длительность MP4 будет точно по голосу, без растягивания и тишины.`);
+        : `Озвучка готова: ${clock(exactDuration)}. Длительность MOV будет точно по голосу, без растягивания и тишины.`);
     };
     probe.onerror = () => setMessage("Голос создан, но браузер не смог прочитать аудиофайл.");
     setAudioName(file.name);
@@ -735,7 +806,7 @@ export default function Home() {
     };
     probe.onerror = () => {
       URL.revokeObjectURL(url);
-      setMessage("Браузер не смог прочитать длительность этого MP4.");
+      setMessage("Браузер не смог прочитать длительность этого видео.");
     };
     probe.src = url;
   }
@@ -830,7 +901,9 @@ export default function Home() {
       const scenesMarkerIndex = matchedScenesMarker?.index ?? -1;
       if (scenesMarkerIndex >= 0) {
         const voicePart = content.slice(0, scenesMarkerIndex).replace(voiceMarker, "").trim();
-        const scenesPart = content.slice(scenesMarkerIndex + matchedScenesMarker!.marker.length).trim();
+        const scenesAndMetadata = content.slice(scenesMarkerIndex + matchedScenesMarker!.marker.length).trim();
+        const nextSectionIndex = scenesAndMetadata.search(/\n\s*===\s*[^=\n]+\s*===/);
+        const scenesPart = (nextSectionIndex >= 0 ? scenesAndMetadata.slice(0, nextSectionIndex) : scenesAndMetadata).trim();
         const voiceWords = voicePart.split(/\s+/).filter(Boolean).length;
         const voiceSeconds = Math.max(30, Math.round((voiceWords / POPULAR_VOICE_WPM) * 60));
         setScript(voicePart);
@@ -859,6 +932,26 @@ export default function Home() {
     reader.onerror = () => setMessage("Не удалось прочитать выбранный файл.");
     reader.readAsText(file);
     event.target.value = "";
+  }
+
+  async function applyLocalRvcVoice(file: File) {
+    let response: Response;
+    try {
+      response = await fetch(`${LOCAL_RVC_ENDPOINT}/convert`, {
+        method: "POST",
+        headers: { "content-type": file.type || "audio/wav" },
+        body: file,
+      });
+    } catch {
+      throw new Error("Локальный голос не запущен. В отдельном терминале выполни: npm run voice-server");
+    }
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(result.error || `Локальный Applio: ${response.status}`);
+    }
+    const audio = await response.blob();
+    if (!audio.size) throw new Error("Локальный Applio вернул пустой WAV");
+    return new File([audio], "psychology-popular-voice.wav", { type: audio.type || "audio/wav" });
   }
 
   async function requestVoiceTrack(list: string[], text: string, desiredSeconds = 0, previousSeconds = 0) {
@@ -930,10 +1023,13 @@ export default function Home() {
         response = await fetch("/api/tts", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ apiKey: takeNextKey(list), text, voice, direction: voiceDirection.replace(/\b(?:Achird|Charon|Gacrux|Schedar|Fenrir|Algieba)\b/g, voice), desiredSeconds, previousSeconds, engine: "gemini-2.5-pro" }),
+          body: JSON.stringify({ apiKey: takeNextKey(list), text: applyRussianVoiceStresses(text), voice: engineVoiceFor(voice), direction: voiceDirection.replace(/\b(?:Achird|CharonSoft|Charon|Gacrux|Schedar|Fenrir|Algieba)\b/g, engineVoiceFor(voice)), desiredSeconds, previousSeconds, engine: "gemini-2.5-pro" }),
+          signal: AbortSignal.timeout(120_000),
         });
-      } catch {
-        lastError = "Сетевое соединение прервалось. Автоматически пробую следующий ключ…";
+      } catch (error) {
+        lastError = error instanceof DOMException && error.name === "TimeoutError"
+          ? "Gemini не ответила за две минуты. Автоматически пробую следующий ключ…"
+          : "Сетевое соединение прервалось. Автоматически пробую следующий ключ…";
         continue;
       }
       if (response.ok) {
@@ -1074,14 +1170,20 @@ export default function Home() {
       // chunk to last at least eight seconds made valid clips (for example six words)
       // look truncated and stopped long narrations at the same chunk every time.
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 1.5, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `narrator-v33:${voice}:${VOICE_TEMPO}:${index}:${voiceDirection}:${chunks[index]}`;
+      const cacheKey = `narrator-v${VOICE_REVISION}-pronunciation-safe:${voice}:${VOICE_TEMPO}:${index}:${voiceDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
-        const savedChunk = await loadProjectBlob(storedKey).catch(() => null);
-        if (savedChunk) {
-          cached = new File([savedChunk], `gemini-${voice.toLowerCase()}-${index + 1}.wav`, { type: savedChunk.type || "audio/wav" });
-          voiceChunkCacheRef.current.set(cacheKey, cached);
+        const candidateRevisions = [...new Set([VOICE_REVISION, restoredVoiceRevisionRef.current])];
+        for (const revision of candidateRevisions) {
+          const candidateCacheKey = `narrator-v${revision}-pronunciation-safe:${voice}:${VOICE_TEMPO}:${index}:${voiceDirection}:${chunks[index]}`;
+          const candidateStoredKey = `voice-chunk:${shortHash(candidateCacheKey)}`;
+          const savedChunk = await loadProjectBlob(candidateStoredKey).catch(() => null);
+          if (savedChunk) {
+            cached = new File([savedChunk], `gemini-${voice.toLowerCase()}-${index + 1}.wav`, { type: savedChunk.type || "audio/wav" });
+            voiceChunkCacheRef.current.set(cacheKey, cached);
+            break;
+          }
         }
       }
       if (cached) {
@@ -1156,6 +1258,14 @@ export default function Home() {
   }
 
   async function previewVoice() {
+    if (voice === "Charon") {
+      if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl);
+      setVoiceError("");
+      setVoicePreviewUrl("/voice-gemini-charon-natural.wav");
+      setMessage("Включаю сохранённый пример глубокого Gemini Charon.");
+      setTimeout(() => voicePreviewRef.current?.play().catch(() => undefined), 0);
+      return;
+    }
     const list = keyList();
     if (!list.length && !isQwenCloneVoice(voice)) { setShowKeys(true); return; }
     setIsGeneratingVoicePreview(true);
@@ -1242,18 +1352,18 @@ export default function Home() {
 
   async function renderVideo(videoScenes: Scene[] = scenes, soundtrack: File | null = audioFile, durationOverride = estimatedDuration) {
     if (!videoScenes.length || videoScenes.some((scene) => !scene.image)) {
-      setMessage("Снача создай все кадры. После этого сайт соберёт их в один MP4.");
+      setMessage("Снача создай все кадры. После этого сайт соберёт их в один MOV для CapCut.");
       return false;
     }
     if (!("VideoEncoder" in window)) {
-      setMessage("Этот браузер не поддерживает быструю сборку MP4. Открой сайт в Chrome.");
+      setMessage("Этот браузер не поддерживает быструю сборку MOV. Открой сайт в Chrome.");
       return false;
     }
     setIsRendering(true);
     setRenderProgress(0);
     setMessage(aspect === "16:9"
-      ? `Собираю лонг MP4: 1080p · ${durationOverride <= 5 * 60 ? 60 : 30} FPS · плавное покачивание ±2,5° · мягкие переходы…`
-      : "Собираю Shorts MP4 без наклона кадров, с озвучкой…");
+      ? `Собираю лонг MOV для CapCut: 1080p · ${durationOverride <= 5 * 60 ? 60 : 30} FPS · H.264/AAC · мягкий зум, панорама и наклон до ±0,9°…`
+      : "Собираю Shorts MOV для CapCut без наклона кадров, с озвучкой…");
     try {
       const landscapeSize = quality === "1K" ? [1280, 720] : quality === "4K" ? [2560, 1440] : [1920, 1080];
       const width = aspect === "9:16" ? landscapeSize[1] : landscapeSize[0];
@@ -1280,7 +1390,7 @@ export default function Home() {
         ? extractOpeningQuote(script) || extractOpeningQuote(videoScenes[0]?.text || "")
         : null;
 
-      // A 30-minute 1080p render can be several gigabytes. Keeping the whole MP4 in
+      // A 30-minute 1080p render can be several gigabytes. Keeping the whole MOV in
       // BufferTarget crashes the browser, so long renders stream into origin-private
       // disk storage and are exposed as a Blob only after finalization.
       const canStreamToDisk = duration > 5 * 60 && typeof navigator.storage?.getDirectory === "function";
@@ -1289,7 +1399,7 @@ export default function Home() {
       let outputTarget: BufferTarget | StreamTarget;
       if (canStreamToDisk) {
         const storageRoot = await navigator.storage.getDirectory();
-        diskFileHandle = await storageRoot.getFileHandle("cineframe-render-working.mp4", { create: true });
+        diskFileHandle = await storageRoot.getFileHandle("cineframe-render-working.mov", { create: true });
         const writable = await diskFileHandle.createWritable({ keepExistingData: false });
         outputTarget = new StreamTarget(writable as unknown as WritableStream<StreamTargetChunk>, { chunked: true, chunkSize: 8 * 1024 * 1024 });
       } else {
@@ -1297,7 +1407,9 @@ export default function Home() {
         outputTarget = bufferTarget;
       }
       const output = new Output({
-        format: new Mp4OutputFormat({ fastStart: canStreamToDisk ? "fragmented" : "in-memory" }),
+        // Long renders use a regular, non-fragmented QuickTime file. CapCut mobile
+        // accepts this H.264/AAC MOV more reliably than fragmented browser MP4.
+        format: new MovOutputFormat({ fastStart: canStreamToDisk ? false : "in-memory" }),
         target: outputTarget,
       });
       const videoSource = new CanvasSource(canvas, { codec: "avc", quality: new Quality("high") });
@@ -1345,18 +1457,23 @@ export default function Home() {
       await output.start();
       if (audioSource && decodedAudio) await audioSource.add(decodedAudio);
 
-      const drawCover = (image: HTMLImageElement, progress: number, alpha = 1) => {
+      const drawCover = (image: HTMLImageElement, progress: number, sceneNumber: number, alpha = 1) => {
         const base = Math.max(width / image.naturalWidth, height / image.naturalHeight);
         const isLongForm = aspect === "16:9";
-        const scale = base * (isLongForm ? 1.08 : 1);
+        const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
+        const motionType = sceneNumber % 4;
+        const zoom = motionType < 2 ? 0.018 * eased : 0.01 * Math.sin(Math.PI * eased);
+        const scale = base * (isLongForm ? 1.085 + zoom : 1);
         const drawnWidth = image.naturalWidth * scale;
         const drawnHeight = image.naturalHeight * scale;
-        const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
-        const rotation = isLongForm ? (2.5 - eased * 5) * Math.PI / 180 : 0;
+        const direction = sceneNumber % 2 === 0 ? 1 : -1;
+        const rotationDegrees = motionType >= 2 ? direction * (LONG_TILT_DEGREES - eased * LONG_TILT_DEGREES * 2) : 0;
+        const panX = isLongForm && motionType === 0 ? direction * width * (eased - 0.5) * 0.018 : 0;
+        const panY = isLongForm && motionType === 1 ? direction * height * (eased - 0.5) * 0.018 : 0;
         context.save();
         context.globalAlpha = alpha;
-        context.translate(width / 2, height / 2);
-        context.rotate(rotation);
+        context.translate(width / 2 + panX, height / 2 + panY);
+        context.rotate(rotationDegrees * Math.PI / 180);
         context.drawImage(image, -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
         context.restore();
       };
@@ -1440,12 +1557,12 @@ export default function Home() {
         const local = Math.max(0, Math.min(1, (timestamp - scene.start) / Math.max(0.001, scene.end - scene.start)));
         context.fillStyle = "#08090a";
         context.fillRect(0, 0, width, height);
-        drawCover(images[sceneIndex], local);
+        drawCover(images[sceneIndex], local, sceneIndex);
         const remaining = scene.end - timestamp;
         if (sceneIndex < videoScenes.length - 1 && remaining <= CROSSFADE_SECONDS) {
           const rawTransition = (CROSSFADE_SECONDS - Math.max(0, remaining)) / CROSSFADE_SECONDS;
           const transition = rawTransition * rawTransition * (3 - 2 * rawTransition);
-          drawCover(images[sceneIndex + 1], transition * 0.06, transition);
+          drawCover(images[sceneIndex + 1], transition * 0.06, sceneIndex + 1, transition);
         }
         await videoSource.add(timestamp, frameDuration, { keyFrame: frame % (fps * 2) === 0 });
         if (frame % fps === 0 || frame === totalFrames - 1) {
@@ -1459,24 +1576,24 @@ export default function Home() {
       let renderedVideo: Blob;
       if (diskFileHandle) {
         const diskFile = await diskFileHandle.getFile();
-        if (!diskFile.size) throw new Error("Временный MP4 на диске оказался пустым");
-        renderedVideo = diskFile.slice(0, diskFile.size, "video/mp4");
+        if (!diskFile.size) throw new Error("Временный MOV на диске оказался пустым");
+        renderedVideo = diskFile.slice(0, diskFile.size, "video/quicktime");
       } else {
-        if (!bufferTarget?.buffer) throw new Error("Не удалось получить готовый MP4");
-        renderedVideo = new Blob([bufferTarget.buffer], { type: "video/mp4" });
+        if (!bufferTarget?.buffer) throw new Error("Не удалось получить готовый MOV");
+        renderedVideo = new Blob([bufferTarget.buffer], { type: "video/quicktime" });
       }
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       await saveProjectBlob("video", renderedVideo)
-        .then(() => setCheckpointStatus("Готовый MP4 сохранён автоматически"))
-        .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `MP4 не сохранился: ${error.message}` : "MP4 не сохранился"));
+        .then(() => setCheckpointStatus("Готовый MOV сохранён автоматически"))
+        .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `MOV не сохранился: ${error.message}` : "MOV не сохранился"));
       setVideoBlob(renderedVideo);
       setVideoUrl(URL.createObjectURL(renderedVideo));
       setRenderProgress(1);
-      setMessage(`Готово: один MP4 ${aspect} собран${soundtrack ? " с озвучкой" : " без озвучки"}.`);
+      setMessage(`Готово: один MOV ${aspect} для CapCut собран${soundtrack ? " с озвучкой" : " без озвучки"}.`);
       return true;
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") setMessage("Сохранение MP4 отменено.");
-      else setMessage(error instanceof Error ? `Сборка не удалась: ${error.message}` : "Сборка MP4 не удалась");
+      if (error instanceof DOMException && error.name === "AbortError") setMessage("Сохранение MOV отменено.");
+      else setMessage(error instanceof Error ? `Сборка не удалась: ${error.message}` : "Сборка MOV не удалась");
       return false;
     } finally {
       setIsRendering(false);
@@ -1485,7 +1602,7 @@ export default function Home() {
 
   async function exportToCapCut() {
     if (!videoBlob || scenes.some((scene) => !scene.image)) {
-      setMessage("Снача дождись готового MP4 и всех кадров.");
+      setMessage("Снача дождись готового MOV и всех кадров.");
       return;
     }
     const shouldContinue = window.confirm("Перед добавлением закрой CapCut, чтобы он не перезаписал список проектов.\n\nЗатем выбери папку com.lveditor.draft.");
@@ -1587,9 +1704,9 @@ export default function Home() {
       if (!generated || generated.some((scene) => !scene.image)) throw new Error("Не все кадры создались. Открой «Исправить отдельные кадры» и повтори красные кадры.");
       setPipelineProgress(80);
       setPipelineStage("render");
-      setPipelineLabel("Собираю кадры и озвучку в один MP4…");
+      setPipelineLabel("Собираю кадры и озвучку в один MOV для CapCut…");
       const rendered = await renderVideo(generated, soundtrack, duration);
-      if (!rendered) throw new Error("Не удалось собрать MP4");
+      if (!rendered) throw new Error("Не удалось собрать MOV");
       setPipelineProgress(100);
       setPipelineStage("done");
       setPipelineLabel("Готовое видео создано");
@@ -1629,9 +1746,9 @@ export default function Home() {
       setScenes(recovered);
       setPipelineStage("render");
       setPipelineProgress(80);
-      setPipelineLabel("Все кадры готовы. Собираю MP4 с сохранённой озвучкой…");
+      setPipelineLabel("Все кадры готовы. Собираю MOV с сохранённой озвучкой…");
       const rendered = await renderVideo(recovered, audioFile, targetDuration);
-      if (!rendered) throw new Error("Не удалось собрать MP4");
+      if (!rendered) throw new Error("Не удалось собрать MOV");
       setPipelineProgress(100);
       setPipelineStage("done");
       setPipelineLabel("Готовое видео создано");
@@ -1650,16 +1767,16 @@ export default function Home() {
     }
     setPipelineStage("render");
     setPipelineProgress(80);
-    setPipelineLabel("Собираю MP4 без голоса…");
+    setPipelineLabel("Собираю MOV без голоса…");
     setVoiceError("");
     const rendered = await renderVideo(scenes, null, targetDuration);
     if (rendered) {
       setPipelineProgress(100);
       setPipelineStage("done");
-      setPipelineLabel("MP4 без голоса готов");
+      setPipelineLabel("MOV без голоса готов");
     } else {
       setPipelineStage("error");
-      setPipelineLabel("Не удалось собрать MP4 без голоса");
+      setPipelineLabel("Не удалось собрать MOV без голоса");
     }
   }
 
@@ -1677,7 +1794,7 @@ export default function Home() {
       <section className="quickHero">
         <p>СОЗДАНИЕ ВИДЕО В ОДНОМ ОКНЕ</p>
         <h1>Вставь текст — получи готовый ролик</h1>
-        <span>Голос, кадры и MP4 идут по порядку. Никакого водяного знака.</span>
+        <span>Голос, кадры и MOV для CapCut идут по порядку. Никакого водяного знака.</span>
       </section>
 
       <section className="quickStudio card">
@@ -1687,7 +1804,7 @@ export default function Home() {
           <textarea className="mainScript" value={script} onChange={(e) => { void invalidateGeneratedProject(); setScript(e.target.value); }} placeholder="Вставь сюда полный текст ролика…" autoFocus disabled={projectLocked} />
           <div className="scriptMeta"><span>{wordCount} слов</span><span>План: {clock(estimatedDuration)}</span></div>
           <div className="quoteHint">Начинай сразу с сильного хука: конфликт, неприятная правда или обещание результата. Отдельной цитаты и долгой заставки не будет.</div>
-          <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { void invalidateGeneratedProject(); setDirection(e.target.value); }} placeholder={"Напиши сцены отдельными строками:\n1. Человек замер посреди вечернего вокзала...\n2. Крупно: руки разрывают старый календарь...\n3. Пустая платформа и уходящий поезд...\n4. Двое спорят у открытой двери..."} disabled={projectLocked} /><small>{aspect === "16:9" ? "Первый кадр — отдельный сильный хук на 20 секунд;" : "Каждый кадр — 10 секунд;"} затем кадры по 10 секунд. Сайт сам чередует действия, людей, предметы, город и пустые атмосферные места. Без отдельной цитаты. Нужно примерно {frameCount} строк. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
+          <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { void invalidateGeneratedProject(); setDirection(e.target.value); }} placeholder={"Напиши сцены отдельными строками:\n1. Человек замер посреди вечернего вокзала...\n2. Крупно: руки разрывают старый календарь...\n3. Пустая платформа и уходящий поезд...\n4. Двое спорят у открытой двери..."} disabled={projectLocked} /><small>{aspect === "16:9" ? "Первые два кадра образуют сильный хук: по 10 секунд каждый;" : "Каждый кадр — 10 секунд;"} затем кадры по 10 секунд. Сайт сам чередует действия, людей, предметы, город и пустые атмосферные места. Без отдельной цитаты. Нужно примерно {frameCount} строк. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
         </div>
 
         <div className="quickDivider" />
@@ -1695,7 +1812,7 @@ export default function Home() {
         <div className="quickStep">
           <div className="quickTitle"><b>2</b><div><h2>Озвучка</h2><p>Выбери голос и нажми большую кнопку. Он прочитает текст сверху.</p></div></div>
           <div className="simpleVoiceRow">
-            <label>Голос<select value={voice} onChange={(e) => { void selectNarrator(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><small>Gemini 2.5 Pro · спокойная человеческая подача без глубокого дикторского тона</small></label>
+            <label>Голос<select value={voice} onChange={(e) => { void selectNarrator(e.target.value); }} disabled={projectLocked}>{VOICES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><small>Есть обычный, спокойный и зрелый Achird около 40 лет; оба варианта Charon тоже сохранены.</small></label>
             {voice === QWEN_CLOUD_CLONE_ID && <label>Fal.ai API key<input type="password" value={falKey} onChange={(e) => { const value = e.target.value.trim(); setFalKey(value); localStorage.setItem("cineframe_fal_key", value); }} placeholder="Вставь ключ Fal.ai" autoComplete="off" disabled={projectLocked} /><small>Хранится только в этом браузере и отправляется через защищённый маршрут сайта.</small></label>}
             <button className="previewButton" onClick={previewVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoicePreview ? "Создаю пример…" : "▶ Пример голоса"}</button>
             <button className="createVoiceButton" onClick={generateVoice} disabled={isGeneratingVoicePreview || isGeneratingVoice}>{isGeneratingVoice ? "Озвучиваю текст…" : "Создать озвучку текста"}</button>
@@ -1705,7 +1822,7 @@ export default function Home() {
           </div>
           {audioUrl && <div className="mainAudio"><div><b>✓ Озвучка ролика готова</b><small>{clock(audioDuration)} · {audioName}{audioIncludesShortsOutro ? " · переход на основной канал добавлен" : ""}</small><a href={audioUrl} download="cineframe-full-voice.wav">Скачать полную WAV</a></div><audio ref={audioRef} src={audioUrl} controls onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)} /></div>}
           <label className={`compactUpload ${audioName ? "filled" : ""}`}><input type="file" accept="audio/*" onChange={handleAudio} disabled={projectLocked} /><span>Или загрузить свою MP3 / WAV</span></label>
-          <label className={`compactUpload ${fitVoiceToVideo ? "filled" : ""}`}><input type="file" accept="video/mp4,video/*" onChange={handleReferenceVideo} disabled={projectLocked} /><span>{fitVoiceToVideo ? `✓ Подгонка под ${referenceVideoName} · ${clock(targetDuration)}` : "Подогнать новую озвучку под готовый MP4"}</span></label>
+          <label className={`compactUpload ${fitVoiceToVideo ? "filled" : ""}`}><input type="file" accept="video/quicktime,video/mp4,video/*" onChange={handleReferenceVideo} disabled={projectLocked} /><span>{fitVoiceToVideo ? `✓ Подгонка под ${referenceVideoName} · ${clock(targetDuration)}` : "Подогнать новую озвучку под готовое видео"}</span></label>
         </div>
 
         <div className="quickDivider" />
@@ -1714,16 +1831,16 @@ export default function Home() {
           <div className="quickTitle"><b>3</b><div><h2>Параметры видео</h2><p>Только три главные настройки.</p></div></div>
           <div className="bigControls">
             <label>Длительность, минут<input type="text" inputMode="decimal" value={durationMinutesInput} onChange={(e) => changeDurationMinutes(e.target.value)} onBlur={() => { const minutes = Number(durationMinutesInput.replace(",", ".")); if (!Number.isFinite(minutes) || minutes < 0.5) applyTargetDuration(targetDuration); }} placeholder="Например, 45" disabled={projectLocked} /><small>{audioDuration ? `Озвучка ${clock(audioDuration)} · видео ${clock(targetDuration)}` : "Можно написать 45, 60, 90… без лимита"}</small></label>
-            <label>Смена кадра<div className="staticControl">{aspect === "16:9" ? "Хук 20 сек, затем по 10" : "Каждые 10 секунд"}</div><small>Мягкий переход 0,35 сек · {frameCount} сцен на {clock(targetDuration)}</small></label>
+            <label>Смена кадра<div className="staticControl">{aspect === "16:9" ? "Хук: 2 кадра по 10 сек" : "Каждые 10 секунд"}</div><small>Дальше также каждые 10 секунд · мягкий переход 0,35 сек · {frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { void invalidateGeneratedProject(); setAspect(e.target.value); }} disabled={projectLocked}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
-          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: плавная анимация +2,5° → −2,5°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? `1080p · ${targetDuration <= 5 * 60 ? 60 : 30} FPS · задумчивый хук с первой секунды · без субтитров` : "Фирменная фраза в конце · без субтитров"}</span></div>
+          <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: мягкий зум, панорама и наклон до ±0,9°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? `1080p · ${targetDuration <= 5 * 60 ? 60 : 30} FPS · двухкадровый хук на первые 20 секунд · без субтитров` : "Фирменная фраза в конце · без субтитров"}</span></div>
           <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Новый живописный стиль канала закреплён</b><small>Thick oil brushwork · teal shadows · crimson rain glow · soft human detail</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : scenes.length || audioFile ? "ПРОДОЛЖИТЬ СОХРАНЁННЫЙ ПРОЕКТ" : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
-          <div className="autosaveStatus"><i /> <span>{checkpointStatus}</span><small>Кадры, озвучка, прогресс и MP4 сохраняются в этом браузере.</small></div>
+          <div className="autosaveStatus"><i /> <span>{checkpointStatus}</span><small>Кадры, озвучка, прогресс и MOV сохраняются в этом браузере.</small></div>
           <div className={`pipelinePanel ${pipelineStage}`} aria-live="polite">
             <div className="pipelineSteps">
-              {["Озвучка", "Кадры", "Сборка MP4", "Готово"].map((label, index) => <div key={label} className={`pipelineStep ${pipelineStage === "error" ? "" : index < pipelineIndex || pipelineStage === "done" ? "done" : index === pipelineIndex ? "active" : ""}`}><i>{index < pipelineIndex || pipelineStage === "done" ? "✓" : index + 1}</i><span>{label}</span></div>)}
+              {["Озвучка", "Кадры", "Сборка MOV", "Готово"].map((label, index) => <div key={label} className={`pipelineStep ${pipelineStage === "error" ? "" : index < pipelineIndex || pipelineStage === "done" ? "done" : index === pipelineIndex ? "active" : ""}`}><i>{index < pipelineIndex || pipelineStage === "done" ? "✓" : index + 1}</i><span>{label}</span></div>)}
             </div>
             <div className="progressTrack"><div className="progressFill" style={{ width: `${pipelineProgress}%` }} /></div>
             <div className="pipelineStatus"><b>{pipelineStage === "error" ? "Ошибка" : `${Math.round(pipelineProgress)}%`}</b><span>{pipelineLabel}</span></div>
@@ -1734,14 +1851,14 @@ export default function Home() {
       </section>
 
       <section className="motionDemo card">
-        <div><p>ТЕСТ ДВИЖЕНИЯ ДЛЯ ЛОНГОВ</p><h2>Вот так кадры 16:9 будут качаться в CapCut</h2><span>Каждая фотография очень плавно идёт от +2,5° к −2,5°. В Shorts 9:16 наклон отключён.</span></div>
-        <video src="/capcut-sway-demo.mp4" controls loop muted playsInline preload="metadata" />
+        <div><p>НОВАЯ СХЕМА ДВИЖЕНИЯ ДЛЯ ЛОНГОВ</p><h2>Кадры больше не качаются одинаково</h2><span>Генератор чередует медленный зум, горизонтальную и вертикальную панораму и едва заметный наклон до ±0,9°. Направление меняется между кадрами; в Shorts наклон отключён.</span></div>
+        <div className="motionPattern"><b>Медленный зум</b><b>Плавная панорама</b><b>Наклон ≤ 0,9°</b><small>Мягкий переход между кадрами: 0,35 сек</small></div>
       </section>
 
       <section className="storyboard card quickStoryboard">
-        <div className="storyHead"><div><h2>Готовое видео</h2><p>{videoUrl ? `${clock(estimatedDuration)} · ${aspect} · озвучка и анимированные кадры` : pipelineRunning ? pipelineLabel : "Здесь появится один собранный ролик"}</p></div>{videoUrl && <div className="storyActions"><a className="downloadVideo downloadReady" href={videoUrl} download="cineframe-video.mp4">Скачать MP4</a></div>}</div>
+        <div className="storyHead"><div><h2>Готовое видео</h2><p>{videoUrl ? `${clock(estimatedDuration)} · ${aspect} · MOV для CapCut · озвучка и анимированные кадры` : pipelineRunning ? pipelineLabel : "Здесь появится один собранный ролик"}</p></div>{videoUrl && <div className="storyActions"><a className="downloadVideo downloadReady" href={videoUrl} download="cineframe-video-capcut.mov">Скачать MOV для CapCut</a></div>}</div>
         {message && <div className="notice">{message}</div>}
-        {videoUrl ? <div className={`finalVideoCard ${aspect === "9:16" ? "vertical" : ""}`}><video src={videoUrl} controls playsInline /><div><b>✓ Ролик собран целиком</b><span>Кадры и тайминг готовы. При необходимости можно убрать голос, не удаляя кадры.</span><button className="capcutButton" onClick={exportToCapCut} disabled={isExportingCapCut}>{isExportingCapCut ? "ДОБАВЛЯЮ В CAPCUT…" : "ДОБАВИТЬ ПРОЕКТ В CAPCUT"}</button><button className="plain" onClick={renderWithoutNarration} disabled={pipelineRunning || done !== scenes.length}>СОБРАТЬ MP4 БЕЗ ГОЛОСА</button><small className="capcutHint">Каждая фотография будет отдельным клипом на таймлайне.</small>{capCutMessage && <em className={`capcutStatus ${capCutMessage.startsWith("Не ") ? "error" : ""}`}>{capCutMessage}</em>}</div></div> : <div className="compactEmpty"><span>{pipelineRunning ? `${Math.round(pipelineProgress)}%` : "Видео пока нет"}</span><p>{pipelineRunning ? pipelineLabel : "Вставь текст и промпты сцен, затем нажми «Создать готовое видео»."}</p></div>}
+        {videoUrl ? <div className={`finalVideoCard ${aspect === "9:16" ? "vertical" : ""}`}><video src={videoUrl} controls playsInline /><div><b>✓ Ролик собран целиком</b><span>Готовый MOV можно сразу отправлять на телефон и открывать в CapCut. Кадры и тайминг сохранены.</span><button className="capcutButton" onClick={exportToCapCut} disabled={isExportingCapCut}>{isExportingCapCut ? "ДОБАВЛЯЮ В CAPCUT…" : "ДОБАВИТЬ ПРОЕКТ В CAPCUT"}</button><button className="plain" onClick={renderWithoutNarration} disabled={pipelineRunning || done !== scenes.length}>СОБРАТЬ MOV БЕЗ ГОЛОСА</button><small className="capcutHint">Каждая фотография будет отдельным клипом на таймлайне.</small>{capCutMessage && <em className={`capcutStatus ${capCutMessage.startsWith("Не ") ? "error" : ""}`}>{capCutMessage}</em>}</div></div> : <div className="compactEmpty"><span>{pipelineRunning ? `${Math.round(pipelineProgress)}%` : "Видео пока нет"}</span><p>{pipelineRunning ? pipelineLabel : "Вставь текст и промпты сцен, затем нажми «Создать готовое видео»."}</p></div>}
         {scenes.length > 0 && <details className="framesEditor"><summary>Исправить отдельные кадры ({done}/{scenes.length})</summary><div className="framesEditorBody"><div className="framesEditorActions"><span>Открывай это только если нужно заменить конкретную картинку.</span><button className="plain" onClick={() => generateAll() } disabled={isGenerating || pipelineRunning}>Повторить незавершённые</button><button className="plain" onClick={() => renderVideo()} disabled={isRendering || isGenerating || done !== scenes.length}>Пересобрать с голосом</button><button className="plain" onClick={renderWithoutNarration} disabled={pipelineRunning || done !== scenes.length}>Собрать без голоса</button></div><div className="workarea"><div className="sceneGrid">{scenes.map((scene) => <button key={scene.id} onClick={() => setSelectedId(scene.id)} className={`shot ${scene.id === selectedId ? "selected" : ""}`}><div className={`shotImage ${aspect === "9:16" ? "vertical" : ""}`}>{scene.image ? <img src={scene.image} alt={`Кадр ${scene.id}`} /> : <span>{scene.status === "working" ? "…" : String(scene.id).padStart(2,"0")}</span>}<i className={scene.status} /></div><small>{clock(scene.start)}–{clock(scene.end)}</small><p>{scene.text}</p>{scene.error && <em>{scene.error}</em>}</button>)}</div>{selected && <aside className="inspector"><div className={`preview ${aspect === "9:16" ? "vertical" : ""}`}>{selected.image ? <img src={selected.image} alt="Предпросмотр" /> : <div>Кадр {selected.id}</div>}</div><label>Текст кадра<textarea value={selected.text} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, text: e.target.value } : item))} /></label><label>Промпт изображения<textarea className="prompt" value={selected.prompt} onChange={(e) => setScenes((items) => items.map((item) => item.id === selected.id ? { ...item, prompt: e.target.value, status: "ready" } : item))} /></label><button className="generate one" onClick={() => { const list = keyList(); if (!list.length) setShowKeys(true); else void generateScene(selected, list); }}>Повторить этот кадр</button></aside>}</div></div></details>}
       </section>
 

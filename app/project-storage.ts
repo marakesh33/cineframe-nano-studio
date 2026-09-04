@@ -33,6 +33,7 @@ export type ProjectCheckpoint = {
   voiceRevision?: number;
   fitVoiceToVideo?: boolean;
   referenceVideoName?: string;
+  videoFormat?: "mp4" | "mov";
   scenes: SavedScene[];
   pipelineStage: "idle" | "voice" | "frames" | "render" | "done" | "error";
   pipelineProgress: number;

@@ -214,7 +214,7 @@ export function buildCapCutDraft(
   const virtualMaterialIds: string[] = [];
   const visualTrack = jsonClone(sourceVideoTrack);
   visualTrack.id = uuid();
-  visualTrack.name = isLongForm ? "01 · КАДРЫ ±2,5°" : "01 · КАДРЫ БЕЗ НАКЛОНА";
+  visualTrack.name = isLongForm ? "01 · КАДРЫ МЯГКОЕ ДВИЖЕНИЕ" : "01 · КАДРЫ БЕЗ НАКЛОНА";
   visualTrack.is_default_name = false;
   visualTrack.segments = [];
 
@@ -247,6 +247,7 @@ export function buildCapCutDraft(
     segment.target_timerange = { start: clipStart, duration: clipDuration };
     segment.extra_material_refs = cloneRefs(sourceVideoSegment.extra_material_refs || []);
     const easeHandle = Math.round(clipDuration * 0.42);
+    const tiltDirection = index % 2 === 0 ? 1 : -1;
     segment.common_keyframes = isLongForm ? [{
       id: keyframeId(),
       material_id: "",
@@ -259,7 +260,7 @@ export function buildCapCutDraft(
           right_control: { x: easeHandle, y: 0 },
           id: keyframeId(),
           time_offset: 0,
-          values: [2.5],
+          values: [0.9 * tiltDirection],
         },
         {
           curveType: "FreeCurveInOut",
@@ -268,7 +269,7 @@ export function buildCapCutDraft(
           right_control: { x: 0, y: 0 },
           id: keyframeId(),
           time_offset: clipDuration,
-          values: [-2.5],
+          values: [-0.9 * tiltDirection],
         },
       ],
     }] : [];
@@ -538,7 +539,7 @@ export async function addProjectToCapCut(options: ExportOptions) {
 
   const built = buildCapCutDraft(template.content, template.meta, rootMeta, projectName, options, {
     images: imageInfo,
-    videoName: "ready-video-audio.mp4",
+    videoName: "ready-video-audio.mov",
     videoSize: options.readyVideo.size,
   });
 
@@ -563,7 +564,7 @@ export async function addProjectToCapCut(options: ExportOptions) {
       options.onProgress?.(`Записываю кадры в CapCut: ${index + 1} из ${imageBlobs.length}…`);
       await writeFile(media, imageInfo[index].name, imageBlobs[index]);
     }
-    await writeFile(media, "ready-video-audio.mp4", options.readyVideo);
+    await writeFile(media, "ready-video-audio.mov", options.readyVideo);
     await writeFile(project, "draft_cover.jpg", await makeJpegCover(imageBlobs[0], options.aspect));
 
     const contentText = `${JSON.stringify(built.content)}\n`;

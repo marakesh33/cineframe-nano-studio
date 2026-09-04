@@ -1,4 +1,5 @@
 const ALLOWED_VOICES = new Set(["Gacrux", "Charon", "Achird", "Schedar", "Fenrir", "Algieba"]);
+const HOSTED_TTS_RELAY = "https://cineframe-nano-studio.ap-kefir-ltd-1820.chatgpt.site/api/tts";
 
 type AudioPart = { data: string; mime: string };
 
@@ -105,6 +106,85 @@ async function responseError(response: Response) {
   return findErrorMessage(result) || `Google TTS: ${response.status}`;
 }
 
+function utf8Prefix(value: string, maxBytes: number) {
+  const encoder = new TextEncoder();
+  if (encoder.encode(value).byteLength <= maxBytes) return value;
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (encoder.encode(value.slice(0, middle)).byteLength <= maxBytes) low = middle;
+    else high = middle - 1;
+  }
+  return value.slice(0, low).trim();
+}
+
+async function tryRegionalCloudTts(options: {
+  apiKey: string;
+  script: string;
+  voice: string;
+  direction: string;
+  timing: string;
+}) {
+  const regionalPrompt = utf8Prefix(
+    `${options.direction}\n\n${options.timing}\nSpeak natural Russian verbatim. Begin gently at normal conversational volume. Preserve punctuation, meaning-led pauses and human sentence melody. Never sound like an announcer, trailer narrator, whisper or synthetic assistant. Do not add or remove words.`,
+    3900,
+  );
+  const text = utf8Prefix(options.script, 3900);
+  let lastError = "региональный Google Cloud TTS недоступен";
+
+  for (const endpoint of ["eu-texttospeech.googleapis.com", "us-texttospeech.googleapis.com"]) {
+    const response = await fetch(`https://${endpoint}/v1/text:synthesize`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": options.apiKey },
+      body: JSON.stringify({
+        input: { prompt: regionalPrompt, text },
+        voice: {
+          languageCode: "ru-RU",
+          name: options.voice,
+          modelName: "gemini-2.5-pro-tts",
+        },
+        audioConfig: { audioEncoding: "LINEAR16" },
+      }),
+    });
+    if (!response.ok) {
+      lastError = await responseError(response);
+      continue;
+    }
+    const result = await response.json() as { audioContent?: string };
+    if (!result.audioContent) {
+      lastError = "Google Cloud TTS не вернула звук";
+      continue;
+    }
+    return { audio: decodeBase64(result.audioContent), error: "" };
+  }
+
+  return { audio: null, error: lastError };
+}
+
+async function tryHostedTtsRelay(body: Record<string, unknown>) {
+  try {
+    const response = await fetch(HOSTED_TTS_RELAY, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "accept": "*/*",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140 Safari/537.36",
+        "origin": "https://cineframe-nano-studio.ap-kefir-ltd-1820.chatgpt.site",
+        "referer": "https://cineframe-nano-studio.ap-kefir-ltd-1820.chatgpt.site/",
+        "x-cineframe-tts-relay": "1",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok || !response.body) {
+      return { response: null, error: await responseError(response) };
+    }
+    return { response, error: "" };
+  } catch (error) {
+    return { response: null, error: error instanceof Error ? error.message : "серверный резерв недоступен" };
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json() as {
@@ -116,6 +196,7 @@ export async function POST(request: Request) {
       previousSeconds?: number;
       engine?: string;
     };
+    const isHostedRelayRequest = request.headers.get("x-cineframe-tts-relay") === "1";
     const apiKey = body.apiKey?.trim();
     const script = body.text?.trim();
     if (!script) return Response.json({ error: "Сценарий пуст" }, { status: 400 });
@@ -123,14 +204,14 @@ export async function POST(request: Request) {
 
     const voice = ALLOWED_VOICES.has(body.voice || "") ? body.voice : "Achird";
     if (!apiKey) return Response.json({ error: "Нужен Google API key" }, { status: 400 });
-    const direction = body.direction?.trim() || "Use Algieba as a warm, smooth native Russian male essay narrator. Speak like a real thoughtful person in a quiet one-to-one conversation: natural contemporary Russian, meaning-led rhythm, subtle emotional variation, relaxed clear diction and gently varied sentence melody. Begin softly without striking the first word. Never sound like an announcer, trailer narrator, meditation app or synthetic assistant. Avoid fixed cadence, mechanical pauses, identical sentence endings, theatrical drama, whispering and stretched vowels.";
+    const direction = body.direction?.trim() || "Use Achird as a warm, smooth native Russian male essay narrator. Speak like a real thoughtful person in a quiet one-to-one conversation: natural contemporary Russian, meaning-led rhythm, subtle emotional variation, relaxed clear diction and gently varied sentence melody. Begin softly without striking the first word. Never sound like an announcer, trailer narrator, meditation app or synthetic assistant. Avoid fixed cadence, mechanical pauses, identical sentence endings, theatrical drama, whispering and stretched vowels.";
     const desiredSeconds = Number.isFinite(body.desiredSeconds) ? Math.max(0, Math.min(600, Math.round(body.desiredSeconds || 0))) : 0;
     const previousSeconds = Number.isFinite(body.previousSeconds) ? Math.max(0, Math.round(body.previousSeconds || 0)) : 0;
     const timing = desiredSeconds
-      ? `The complete recording should last approximately ${desiredSeconds} seconds, averaging about ${Math.max(70, Math.round(script.split(/\s+/).length / desiredSeconds * 60))} words per minute. This excerpt belongs to one continuous long-form conversation: enter it as if the previous thought has just ended, and do not give the final sentence a grand closing cadence unless the meaning truly concludes. Do not pause mechanically at every full stop. Carry related sentences forward as one continuous thought, using only brief breathing space where a real speaker would need it. Pause more clearly only when the meaning genuinely changes. Let the pace vary subtly inside sentences instead of stretching vowels or inserting dramatic silence. ${previousSeconds ? `The previous attempt lasted ${previousSeconds} seconds, so ${previousSeconds < desiredSeconds ? "relax the cadence slightly without adding empty gaps" : "tighten the cadence and remove unnecessary gaps"}.` : "Let punctuation guide the rhythm without obeying it mechanically."}`
+      ? `The complete recording may last approximately ${desiredSeconds} seconds, averaging about ${Math.max(70, Math.round(script.split(/\s+/).length / desiredSeconds * 60))} words per minute. This excerpt is part of one continuous conversation. Follow punctuation naturally, but do not insert a pause after every comma or create long empty gaps. Pronunciation accuracy has absolute priority over this approximate duration: never rush, merge words, replace syllables or cut word endings to fit the time. Taking a little longer is correct. ${previousSeconds ? `The previous attempt lasted ${previousSeconds} seconds; adjust only silence and broad conversational pace, never articulation.` : "Keep a steady, unhurried human flow."}`
       : "Use a natural medium pace.";
     const performanceScript = body.engine?.startsWith("gemini-2.5") ? script : addExpressiveTags(script);
-    const prompt = `${direction}\n\n${timing}\nBegin the first line calmly at normal conversational volume, without punching the first word or turning it into a dramatic hook. Keep the sound clear and fully voiced; do not whisper. Avoid a fixed sentence-by-sentence rhythm: think in complete ideas, vary emphasis gently, and allow one phrase to flow naturally into the next. Do not sound grave or commanding. Text in square brackets contains silent performance directions and must not be spoken. Do not add an opening quotation or a long intro unless it is already present in the supplied script. Read the Russian words below verbatim. Do not announce these instructions, do not add an introduction, and do not add or remove any spoken words.\n\nSCRIPT:\n${performanceScript}`;
+    const prompt = `${direction}\n\n${timing}\nStart at normal conversational volume. Keep the sound clean and fully voiced. Treat square brackets as silent directions. Read every Russian word exactly as written and pronounce every syllable and ending completely. Never fuse adjacent words, guess a similar-sounding form, substitute a syllable, or paraphrase. Combining acute accents mark stress and must not be spoken as separate symbols. Do not announce these instructions or add an introduction.\n\nSCRIPT:\n${performanceScript}`;
     if (body.engine === "gemini-2.5" || body.engine === "gemini-2.5-pro") {
       const model = body.engine === "gemini-2.5-pro" ? "gemini-2.5-pro-preview-tts" : "gemini-2.5-flash-preview-tts";
       const legacyResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`, {
@@ -139,7 +220,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
-            temperature: 1,
+            temperature: 0.82,
             responseModalities: ["AUDIO"],
             speechConfig: {
               languageCode: "ru-RU",
@@ -148,7 +229,38 @@ export async function POST(request: Request) {
           },
         }),
       });
-      if (!legacyResponse.ok) return Response.json({ error: await responseError(legacyResponse) }, { status: legacyResponse.status });
+      if (!legacyResponse.ok) {
+        const legacyError = await responseError(legacyResponse);
+        if (/location is not supported|unsupported (?:user )?location|failed_precondition/i.test(legacyError)) {
+          if (!isHostedRelayRequest) {
+            const relay = await tryHostedTtsRelay(body as Record<string, unknown>);
+            if (relay.response?.body) {
+              return new Response(relay.response.body, {
+                headers: {
+                  "content-type": relay.response.headers.get("content-type") || "application/json",
+                  "x-gemini-audio-stream": relay.response.headers.get("x-gemini-audio-stream") || "0",
+                  "x-gemini-tts-model": relay.response.headers.get("x-gemini-tts-model") || "gemini-hosted-relay",
+                  "cache-control": "no-store",
+                },
+              });
+            }
+          }
+          const regional = await tryRegionalCloudTts({ apiKey, script, voice, direction, timing });
+          if (regional.audio) {
+            return new Response(regional.audio, {
+              headers: {
+                "content-type": "audio/wav",
+                "x-gemini-tts-model": "gemini-2.5-pro-tts-eu-us-fallback",
+                "cache-control": "no-store",
+              },
+            });
+          }
+          return Response.json({
+            error: `Текущий IP не поддерживается Gemini. Серверный и региональный резервы тоже недоступны: ${regional.error}. Нажми «Продолжить озвучку» ещё раз или выбери локальный голос.`,
+          }, { status: 400 });
+        }
+        return Response.json({ error: legacyError }, { status: legacyResponse.status });
+      }
       if (!legacyResponse.body) return Response.json({ error: "Gemini 2.5 не вернула поток аудио" }, { status: 502 });
       return new Response(legacyResponse.body, {
         headers: {
