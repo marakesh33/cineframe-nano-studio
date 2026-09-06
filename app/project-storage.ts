@@ -19,6 +19,7 @@ export type ProjectCheckpoint = {
   script: string;
   direction: string;
   style: string;
+  generationPreset?: "viral" | "classic";
   targetDuration: number;
   durationMinutesInput: string;
   quality: string;

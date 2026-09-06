@@ -28,7 +28,13 @@ type Scene = {
 
 type PipelineStage = "idle" | "voice" | "frames" | "render" | "done" | "error";
 
-const DEFAULT_STYLE = `cinematic oil-painting style matching the supplied channel references, unmistakably hand-painted rather than photographic, dense broad visible brushstrokes and soft impasto texture across the entire frame, gently simplified faces and objects, softened contours, low microcontrast, smoky atmospheric depth and restrained analog grain, deep teal and petrol-blue shadows with readable detail, vivid crimson-red atmospheric light and warm amber accents. Keep the exposure about ten to fifteen percent brighter than a very dark cinematic frame: luminous faces and midtones, readable background detail, controlled blacks without crushed shadows, never muddy or underexposed. Cinematic 16:9 widescreen composition. Build a varied story-driven sequence instead of a portrait series: alternate people performing clear actions, expressive hands and useful objects, two-person or group interactions, architecture, city exteriors, landscapes, symbolic still lifes and environment-only frames. Human presence is optional and must serve the spoken idea. Never default to the same lonely seated man, the same room, bed, chair, desk or window across neighboring frames. No sharp modern digital detail, no glossy CGI, no hyperreal skin, no clean vector edges, no neon cyberpunk look, no text, no subtitles, no logo, no watermark`;
+type GenerationPreset = "viral" | "classic";
+
+const CLASSIC_STYLE = `cinematic oil-painting style matching the supplied channel references, unmistakably hand-painted rather than photographic, dense broad visible brushstrokes and soft impasto texture across the entire frame, gently simplified faces and objects, softened contours, low microcontrast, smoky atmospheric depth and restrained analog grain, deep teal and petrol-blue shadows with readable detail, vivid crimson-red atmospheric light and warm amber accents. Keep the exposure about ten to fifteen percent brighter than a very dark cinematic frame: luminous faces and midtones, readable background detail, controlled blacks without crushed shadows, never muddy or underexposed. Cinematic 16:9 widescreen composition. Build a varied story-driven sequence instead of a portrait series: alternate people performing clear actions, expressive hands and useful objects, two-person or group interactions, architecture, city exteriors, landscapes, symbolic still lifes and environment-only frames. Human presence is optional and must serve the spoken idea. Never default to the same lonely seated man, the same room, bed, chair, desk or window across neighboring frames. No sharp modern digital detail, no glossy CGI, no hyperreal skin, no clean vector edges, no neon cyberpunk look, no text, no subtitles, no logo, no watermark`;
+
+const VIRAL_STYLE = `cinematic oil-painting style matching the supplied channel references, unmistakably hand-painted rather than photographic, dense broad visible brushstrokes and soft impasto texture, gently simplified faces and objects, softened contours, restrained analog grain. Use the brighter high-contrast packaging of the channel's newest successful thumbnail: luminous teal and petrol-blue shadows, warm amber and yellow key light, vivid controlled crimson accents, clean separation between foreground and background, readable midtones and controlled blacks. Keep the image roughly twenty percent brighter and more saturated than a dark cinematic frame, never muddy or underexposed. Cinematic 16:9 widescreen composition. Every frame must communicate one concrete idea in one second: one dominant person or object, one visible conflict, choice or consequence, and one unmistakable focal point. When emotion matters, bring the face and expressive hands closer; otherwise show a clear action, environment or meaningful object. Alternate close human emotion, physical action, wide consequence and object detail so neighboring frames never feel repeated. Avoid clutter, collage layouts, tiny decorative symbols, generic posing and the same lonely seated man, room, bed, chair, desk or window. No sharp modern digital detail, glossy CGI, hyperreal skin, clean vector edges, neon cyberpunk look, text, subtitles, logo or watermark`;
+
+const DEFAULT_STYLE = VIRAL_STYLE;
 
 const STYLE_REFERENCE_PATHS = [
   "/style-references/psychology-style-old-soft.jpg",
@@ -65,6 +71,8 @@ const DEFAULT_VOICE_DIRECTION = `You are Nikolai, a native Russian man in his ea
 Speak as if you are sending a thoughtful voice message to one familiar person. Use ordinary contemporary Russian, a calm natural tempo and clear relaxed diction. Follow the meaning of the complete thought. Give important words mild attention, while small connecting words remain light. Let sentences flow normally; pause only where a real speaker needs to breathe or where the idea changes.
 
 Keep the performance clean and emotionally alive but understated. No acting, performed hesitations, artificial breaths, dramatic hook delivery, solemnity, whispering or forced friendliness. Never use a fixed rhythm, identical pauses, repeated falling endings, stretched vowels, swallowed endings or robotic precision. Read the supplied text verbatim without adding, removing or paraphrasing words.`;
+
+const VIRAL_HOOK_VOICE_NOTE = `For only the opening passage, keep exactly the same voice identity and timbre but sound immediately engaged, like you have just noticed something important. Start gently at normal volume, make the first sentence only slightly quicker, place one short meaning-led pause after the central contradiction, and give one key word mild emphasis. Do not shout, whisper, become theatrical or change into an announcer. After the opening, settle naturally into the base conversational delivery.`;
 
 const ACHIRD_CALM_VOICE_DIRECTION = `You are Nikolai, a native Russian man in his early thirties. Use Gemini Achird's clean and warm timbre in a calm natural medium-low register. Keep the familiar living Achird character, making it only slightly deeper and more composed — about five percent lower in perceived weight, never a heavy baritone.
 
@@ -452,7 +460,7 @@ function splitVoiceText(text: string, maxChars = 220) {
   return chunks.length ? chunks : [text.trim()];
 }
 
-function shotDescription(direction: string, index: number, fragment: string) {
+function shotDescription(direction: string, index: number, fragment: string, preset: GenerationPreset) {
   const numbered = direction.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   let containsNumberedScenes = false;
   for (const line of numbered) {
@@ -475,7 +483,8 @@ function shotDescription(direction: string, index: number, fragment: string) {
     "a social contrast with several distinct people at different distances, avoiding a centered hero portrait",
     "an atmospheric location-only image where lighting, weather and one concrete trace of human activity tell the story",
   ][index % 10];
-  const storyReset = index >= 2 && (index - 2) % STORY_RESET_EVERY_SCENES === 0
+  const resetEvery = preset === "viral" ? 6 : STORY_RESET_EVERY_SCENES;
+  const storyReset = index >= 2 && (index - 2) % resetEvery === 0
     ? "STORY RESET: introduce a new concrete conflict, question or mini-story with a visibly different person, age, location and camera distance. The image must feel like a new chapter while preserving the palette."
     : "";
   return `${storyReset} ${generalDirection} Create one concrete narrative illustration that directly visualizes this exact voiceover fragment: "${fragment}". The assigned visual role for this frame is ${visualRole}. Choose a believable location and only the people, action and objects needed to communicate the current sentence. Change the subject, posture and setting from neighboring frames by default; also vary age and camera distance. Palette continuity is enough. Prefer literal cause-and-effect storytelling over vague symbols. Do not invent an unrelated office portrait, random philosopher, decorative statue, raven or abstract object unless the quoted narration genuinely requires it`;
@@ -487,7 +496,7 @@ function cleanSceneDescription(value: string) {
   return subject.trim().replace(/[,. ]+$/, "");
 }
 
-function splitIntoScenes(text: string, count: number, duration: number, style: string, direction: string, aspect: string, openingSeconds = 0) {
+function splitIntoScenes(text: string, count: number, duration: number, style: string, direction: string, aspect: string, openingSeconds = 0, preset: GenerationPreset = "viral") {
   const words = text.trim().split(/\s+/).filter(Boolean);
   const actualCount = Math.max(1, count);
   const openingDuration = Math.min(duration, Math.max(0, openingSeconds));
@@ -499,11 +508,12 @@ function splitIntoScenes(text: string, count: number, duration: number, style: s
     const from = Math.floor((start / Math.max(1, duration)) * words.length);
     const to = Math.floor((end / Math.max(1, duration)) * words.length);
     const fragment = words.slice(from, to).join(" ") || words[index % Math.max(1, words.length)] || direction || "Визуальная сцена";
-    const describedScene = cleanSceneDescription(shotDescription(direction, index, fragment));
+    const describedScene = cleanSceneDescription(shotDescription(direction, index, fragment, preset));
+    const viralClarity = preset === "viral" ? " Make the focal face or object large and readable at phone size, with bright teal, amber and controlled red separation. Show one conflict only; no collage or visual clutter." : "";
     const scenePrompt = index === 0
-      ? `OPENING HOOK FRAME 1 OF 2 — show the painful visual contradiction behind the opening words in one instantly understandable scene. Make it psychologically tense and impossible to ignore: one decisive action or consequence, a pensive indirect gaze, expressive hands, meaningful negative space and one unanswered visual question. No seated pose, chair, sofa, bed, desk or passive man staring through a window unless the spoken text explicitly requires it. Avoid a generic collage, smiling presenter or decorative symbolism. ${describedScene}`
+      ? `OPENING HOOK FRAME 1 OF 2 — show the painful visual contradiction behind the opening words in one instantly understandable scene. Make it psychologically tense and impossible to ignore: one decisive action or consequence, a pensive indirect gaze, expressive hands, meaningful negative space and one unanswered visual question.${viralClarity} No seated pose, chair, sofa, bed, desk or passive man staring through a window unless the spoken text explicitly requires it. Avoid a generic collage, smiling presenter or decorative symbolism. ${describedScene}`
       : index === 1
-        ? `OPENING HOOK FRAME 2 OF 2 — reveal the unexpected cause, hidden mechanism or promised way out from frame one. Use a clearly different composition, camera distance, action and location from the first image so the first twenty seconds feel like progression rather than repetition. Keep one strong focal point and directly visualize the next spoken claim. ${describedScene}`
+        ? `OPENING HOOK FRAME 2 OF 2 — reveal the unexpected cause, hidden mechanism or promised way out from frame one. Use a clearly different composition, camera distance, action and location from the first image so the first twenty seconds feel like progression rather than repetition. Keep one strong focal point and directly visualize the next spoken claim.${viralClarity} ${describedScene}`
         : describedScene;
     return {
       id: index + 1,
@@ -520,6 +530,7 @@ export default function Home() {
   const [script, setScript] = useState("");
   const [direction, setDirection] = useState("");
   const [style, setStyle] = useState(DEFAULT_STYLE);
+  const [generationPreset, setGenerationPreset] = useState<GenerationPreset>("viral");
   const [audioName, setAudioName] = useState("");
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState("");
@@ -588,7 +599,9 @@ export default function Home() {
         checkpointIdRef.current = checkpoint.checkpointId;
         setScript(checkpoint.script);
         setDirection(checkpoint.direction);
-        setStyle(DEFAULT_STYLE);
+        const restoredPreset: GenerationPreset = checkpoint.generationPreset || "classic";
+        setGenerationPreset(restoredPreset);
+        setStyle(checkpoint.style || (restoredPreset === "viral" ? VIRAL_STYLE : CLASSIC_STYLE));
         setTargetDuration(checkpoint.targetDuration);
         setDurationMinutesInput(checkpoint.durationMinutesInput);
         setQuality(checkpoint.quality === "1K" ? "2K" : checkpoint.quality || "2K");
@@ -652,6 +665,7 @@ export default function Home() {
         script,
         direction,
         style,
+        generationPreset,
         targetDuration,
         durationMinutesInput,
         quality,
@@ -677,7 +691,7 @@ export default function Home() {
         .catch((error: unknown) => setCheckpointStatus(error instanceof Error ? `Не сохранилось: ${error.message}` : "Не удалось сохранить проект"));
     }, 300);
     return () => window.clearTimeout(timeout);
-  }, [script, direction, style, targetDuration, durationMinutesInput, quality, aspect, voice, voiceDirection, audioName, audioDuration, openingQuoteDuration, audioSource, audioIncludesShortsOutro, fitVoiceToVideo, referenceVideoName, scenes, pipelineStage, pipelineProgress, pipelineLabel]);
+  }, [script, direction, style, generationPreset, targetDuration, durationMinutesInput, quality, aspect, voice, voiceDirection, audioName, audioDuration, openingQuoteDuration, audioSource, audioIncludesShortsOutro, fitVoiceToVideo, referenceVideoName, scenes, pipelineStage, pipelineProgress, pipelineLabel]);
 
   const wordCount = useMemo(() => script.trim().split(/\s+/).filter(Boolean).length, [script]);
   const estimatedDuration = Math.max(1, targetDuration);
@@ -738,6 +752,16 @@ export default function Home() {
     await Promise.all([deleteProjectBlob("audio"), deleteProjectBlob("video")]).catch((error: unknown) => {
       setCheckpointStatus(error instanceof Error ? `Не удалось удалить старый звук: ${error.message}` : "Не удалось удалить старый звук");
     });
+  }
+
+  async function selectGenerationPreset(nextPreset: GenerationPreset) {
+    if (nextPreset === generationPreset) return;
+    await invalidateGeneratedProject();
+    setGenerationPreset(nextPreset);
+    setStyle(nextPreset === "viral" ? VIRAL_STYLE : CLASSIC_STYLE);
+    setMessage(nextPreset === "viral"
+      ? "Включена новая подача: ярче кадры, сильнее первые 20 секунд и новый визуальный поворот каждую минуту. Тембр голоса не меняется."
+      : "Включён классический режим — прежний стиль кадров и прежняя манера начала.");
   }
 
   async function attachAudio(file: File, options: { preserveScenes?: boolean; source?: "generated" | "uploaded"; includesShortsOutro?: boolean } = {}) {
@@ -837,7 +861,7 @@ export default function Home() {
       setMessage("Снача вставь свой сценарий.");
       return;
     }
-    const next = splitIntoScenes(script, expectedScenes, estimatedDuration, style, direction, aspect, openingSeconds);
+    const next = splitIntoScenes(script, expectedScenes, estimatedDuration, style, direction, aspect, openingSeconds, generationPreset);
     setScenes(next);
     setSelectedId(next[0]?.id || null);
     setMessage(`Готово: ${next.length} кадров на ${clock(estimatedDuration)}. Можно проверить промпты и запускать Nano Banana.`);
@@ -954,7 +978,7 @@ export default function Home() {
     return new File([audio], "psychology-popular-voice.wav", { type: audio.type || "audio/wav" });
   }
 
-  async function requestVoiceTrack(list: string[], text: string, desiredSeconds = 0, previousSeconds = 0) {
+  async function requestVoiceTrack(list: string[], text: string, desiredSeconds = 0, previousSeconds = 0, directionOverride?: string) {
     if (voice === QWEN_LOCAL_CLONE_ID) {
       const response = await fetch("/api/voicebox", {
         method: "POST",
@@ -1023,7 +1047,7 @@ export default function Home() {
         response = await fetch("/api/tts", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ apiKey: takeNextKey(list), text: applyRussianVoiceStresses(text), voice: engineVoiceFor(voice), direction: voiceDirection.replace(/\b(?:Achird|CharonSoft|Charon|Gacrux|Schedar|Fenrir|Algieba)\b/g, engineVoiceFor(voice)), desiredSeconds, previousSeconds, engine: "gemini-2.5-pro" }),
+          body: JSON.stringify({ apiKey: takeNextKey(list), text: applyRussianVoiceStresses(text), voice: engineVoiceFor(voice), direction: (directionOverride || voiceDirection).replace(/\b(?:Achird|CharonSoft|Charon|Gacrux|Schedar|Fenrir|Algieba)\b/g, engineVoiceFor(voice)), desiredSeconds, previousSeconds, engine: "gemini-2.5-pro" }),
           signal: AbortSignal.timeout(120_000),
         });
       } catch (error) {
@@ -1170,13 +1194,16 @@ export default function Home() {
       // chunk to last at least eight seconds made valid clips (for example six words)
       // look truncated and stopped long narrations at the same chunk every time.
       const chunkSeconds = Math.max(isOpeningChunk ? 3 : 1.5, chunkWords / POPULAR_VOICE_WPM * 60);
-      const cacheKey = `narrator-v${VOICE_REVISION}-pronunciation-safe:${voice}:${VOICE_TEMPO}:${index}:${voiceDirection}:${chunks[index]}`;
+      const effectiveDirection = generationPreset === "viral" && index === 0 && !isQwenCloneVoice(voice)
+        ? `${voiceDirection}\n\n${VIRAL_HOOK_VOICE_NOTE}`
+        : voiceDirection;
+      const cacheKey = `narrator-v${VOICE_REVISION}-pronunciation-safe:${voice}:${VOICE_TEMPO}:${index}:${effectiveDirection}:${chunks[index]}`;
       const storedKey = `voice-chunk:${shortHash(cacheKey)}`;
       let cached = voiceChunkCacheRef.current.get(cacheKey);
       if (!cached) {
         const candidateRevisions = [...new Set([VOICE_REVISION, restoredVoiceRevisionRef.current])];
         for (const revision of candidateRevisions) {
-          const candidateCacheKey = `narrator-v${revision}-pronunciation-safe:${voice}:${VOICE_TEMPO}:${index}:${voiceDirection}:${chunks[index]}`;
+          const candidateCacheKey = `narrator-v${revision}-pronunciation-safe:${voice}:${VOICE_TEMPO}:${index}:${effectiveDirection}:${chunks[index]}`;
           const candidateStoredKey = `voice-chunk:${shortHash(candidateCacheKey)}`;
           const savedChunk = await loadProjectBlob(candidateStoredKey).catch(() => null);
           if (savedChunk) {
@@ -1196,10 +1223,10 @@ export default function Home() {
         continue;
       }
       const requestedSeconds = chunkSeconds;
-      let part = await requestVoiceTrack(list, chunks[index], requestedSeconds);
+      let part = await requestVoiceTrack(list, chunks[index], requestedSeconds, 0, effectiveDirection);
       let partDuration = await measureAudio(part);
       if (voice !== "Gacrux" && !isQwenCloneVoice(voice) && (partDuration < chunkSeconds * 0.9 || partDuration > chunkSeconds * 1.12)) {
-        const retry = await requestVoiceTrack(list, chunks[index], requestedSeconds, partDuration);
+        const retry = await requestVoiceTrack(list, chunks[index], requestedSeconds, partDuration, effectiveDirection);
         const retryDuration = await measureAudio(retry);
         if (Math.abs(retryDuration - chunkSeconds) < Math.abs(partDuration - chunkSeconds)) {
           part = retry;
@@ -1322,7 +1349,7 @@ export default function Home() {
     if (!script.trim()) { setMessage("Вставь текст для озвучки в большое поле сверху."); return; }
     let activeScenes = sourceScenes || scenes;
     if (!activeScenes.length) {
-      activeScenes = splitIntoScenes(script, frameCount, estimatedDuration, style, direction, aspect, openingSeconds);
+      activeScenes = splitIntoScenes(script, frameCount, estimatedDuration, style, direction, aspect, openingSeconds, generationPreset);
       setScenes(activeScenes);
       setSelectedId(activeScenes[0]?.id || null);
     }
@@ -1686,7 +1713,7 @@ export default function Home() {
         && (planOpeningSeconds <= 0 || Math.abs((scenes[0]?.end || 0) - planOpeningSeconds) < 0.05)
         && scenes.slice(planOpeningSeconds > 0 ? 1 : 0, -1).every((scene) => Math.abs(scene.end - scene.start - SCENE_SECONDS) < 0.05)
         && scenes.every((scene, index) => scene.id === index + 1);
-      const plan = reusablePlan ? scenes : splitIntoScenes(script, planFrameCount, duration, style, direction, aspect, planOpeningSeconds);
+      const plan = reusablePlan ? scenes : splitIntoScenes(script, planFrameCount, duration, style, direction, aspect, planOpeningSeconds, generationPreset);
       setScenes(plan);
       setSelectedId(plan[0]?.id || null);
       let generated = await generateAll(plan, list, (completed, total) => {
@@ -1803,7 +1830,7 @@ export default function Home() {
           <label className="textFileImport"><input type="file" accept=".txt,.md,text/plain,text/markdown" onChange={importTextFile} disabled={projectLocked} /><b>Загрузить файл с компьютера</b><span>TXT с озвучкой, промптами или готовым проектом</span></label>
           <textarea className="mainScript" value={script} onChange={(e) => { void invalidateGeneratedProject(); setScript(e.target.value); }} placeholder="Вставь сюда полный текст ролика…" autoFocus disabled={projectLocked} />
           <div className="scriptMeta"><span>{wordCount} слов</span><span>План: {clock(estimatedDuration)}</span></div>
-          <div className="quoteHint">Начинай сразу с сильного хука: конфликт, неприятная правда или обещание результата. Отдельной цитаты и долгой заставки не будет.</div>
+          <div className="quoteHint">{generationPreset === "viral" ? "Новая подача: первая фраза сразу обещает ответ, первые два кадра показывают конфликт и его скрытую причину. Без цитаты и заставки." : "Классическая подача сохранена для отката. Начинай с конфликта, неприятной правды или обещания результата."}</div>
           <label className="scenePromptBlock"><span>Промпт сцен и видео</span><textarea value={direction} onChange={(e) => { void invalidateGeneratedProject(); setDirection(e.target.value); }} placeholder={"Напиши сцены отдельными строками:\n1. Человек замер посреди вечернего вокзала...\n2. Крупно: руки разрывают старый календарь...\n3. Пустая платформа и уходящий поезд...\n4. Двое спорят у открытой двери..."} disabled={projectLocked} /><small>{aspect === "16:9" ? "Первые два кадра образуют сильный хук: по 10 секунд каждый;" : "Каждый кадр — 10 секунд;"} затем кадры по 10 секунд. Сайт сам чередует действия, людей, предметы, город и пустые атмосферные места. Без отдельной цитаты. Нужно примерно {frameCount} строк. Стиль добавляется автоматически; этот текст не озвучивается.</small></label>
         </div>
 
@@ -1828,14 +1855,15 @@ export default function Home() {
         <div className="quickDivider" />
 
         <div className="quickStep">
-          <div className="quickTitle"><b>3</b><div><h2>Параметры видео</h2><p>Только три главные настройки.</p></div></div>
+          <div className="quickTitle"><b>3</b><div><h2>Параметры видео</h2><p>Главные настройки ролика и подачи.</p></div></div>
           <div className="bigControls">
+            <label>Подача<select value={generationPreset} onChange={(e) => { void selectGenerationPreset(e.target.value as GenerationPreset); }} disabled={projectLocked}><option value="viral">Вирусный 2026 · яркий хук</option><option value="classic">Классический · откат</option></select><small>{generationPreset === "viral" ? "Новый светлый стиль, сильнее хук и удержание" : "Прежняя схема генерации кадров и голоса"}</small></label>
             <label>Длительность, минут<input type="text" inputMode="decimal" value={durationMinutesInput} onChange={(e) => changeDurationMinutes(e.target.value)} onBlur={() => { const minutes = Number(durationMinutesInput.replace(",", ".")); if (!Number.isFinite(minutes) || minutes < 0.5) applyTargetDuration(targetDuration); }} placeholder="Например, 45" disabled={projectLocked} /><small>{audioDuration ? `Озвучка ${clock(audioDuration)} · видео ${clock(targetDuration)}` : "Можно написать 45, 60, 90… без лимита"}</small></label>
             <label>Смена кадра<div className="staticControl">{aspect === "16:9" ? "Хук: 2 кадра по 10 сек" : "Каждые 10 секунд"}</div><small>Дальше также каждые 10 секунд · мягкий переход 0,35 сек · {frameCount} сцен на {clock(targetDuration)}</small></label>
             <label>Формат<select value={aspect} onChange={(e) => { void invalidateGeneratedProject(); setAspect(e.target.value); }} disabled={projectLocked}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Shorts</option></select><small>{aspect === "9:16" ? "Вертикальное видео" : "Горизонтальное видео"}</small></label>
           </div>
           <div className="quickOptions"><strong>{aspect === "16:9" ? "Лонги: мягкий зум, панорама и наклон до ±0,9°" : "Shorts: кадры без наклона"}</strong><span>{aspect === "16:9" ? `1080p · ${targetDuration <= 5 * 60 ? 60 : 30} FPS · двухкадровый хук на первые 20 секунд · без субтитров` : "Фирменная фраза в конце · без субтитров"}</span></div>
-          <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>Новый живописный стиль канала закреплён</b><small>Thick oil brushwork · teal shadows · crimson rain glow · soft human detail</small></div></details>
+          <details className="advanced"><summary>Дополнительные настройки</summary><label>Качество<select value={quality} onChange={(e) => { void invalidateGeneratedProject(); setQuality(e.target.value); }} disabled={projectLocked}><option>1K</option><option>2K</option><option>4K</option></select></label><label>Манера речи<textarea value={voiceDirection} onChange={(e) => { void invalidateGeneratedProject(); setVoiceDirection(e.target.value); }} disabled={projectLocked} /></label><div className="lockedStyle"><b>{generationPreset === "viral" ? "Яркий живописный стиль новой обложки" : "Классический живописный стиль"}</b><small>{generationPreset === "viral" ? "Один герой · один конфликт · teal / amber / red · читается с телефона" : "Thick oil brushwork · teal shadows · crimson rain glow · soft human detail"}</small></div></details>
           <button className="createFramesButton wholeVideoButton" onClick={createWholeVideo} disabled={pipelineRunning || !script.trim()}>{pipelineRunning ? pipelineLabel : scenes.length || audioFile ? "ПРОДОЛЖИТЬ СОХРАНЁННЫЙ ПРОЕКТ" : "СОЗДАТЬ ГОТОВОЕ ВИДЕО"}</button>
           <div className="autosaveStatus"><i /> <span>{checkpointStatus}</span><small>Кадры, озвучка, прогресс и MOV сохраняются в этом браузере.</small></div>
           <div className={`pipelinePanel ${pipelineStage}`} aria-live="polite">
